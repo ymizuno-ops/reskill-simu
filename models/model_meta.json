@@ -1,0 +1,45 @@
+{
+  "ridge": {
+    "r2_train": 0.7922,
+    "r2_cv_mean": 0.7654,
+    "r2_cv_std": 0.0211,
+    "mae_train": 63.78,
+    "features": [
+      "occupation",
+      "age",
+      "experience_years"
+    ],
+    "label": "Ridge Regression（安定型）",
+    "desc": "過学習を抑えた線形回帰。平均的・標準的なキャリアパスの推計に最適。"
+  },
+  "random_forest": {
+    "r2_train": 0.5878,
+    "r2_cv_mean": 0.5582,
+    "r2_cv_std": 0.0493,
+    "mae_train": 112.32,
+    "features": [
+      "occupation",
+      "age",
+      "experience_years"
+    ],
+    "label": "Random Forest（変動型）",
+    "desc": "職種固有の昇給パターンを細かく学習。上振れ・下振れシナリオの確認に。"
+  },
+  "custom": {
+    "r2_train": 0.8628,
+    "r2_cv_mean": 0.8514,
+    "r2_cv_std": 0.0163,
+    "mae_train": 47.59,
+    "features": [
+      "occupation",
+      "age",
+      "experience_years",
+      "age_sq",
+      "age_x_exp",
+      "exp_ratio",
+      "prime_age_flag"
+    ],
+    "label": "Custom Ridge（特徴量強化型）",
+    "desc": "年齢²・交互作用項を追加した高精度モデル。"
+  }
+}

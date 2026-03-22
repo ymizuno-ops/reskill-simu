@@ -1,0 +1,16 @@
+# Pythonのキャッシュ
+__pycache__/
+*.py[cod]
+
+# 大容量のデータファイル（Git管理から外す）
+data/raw/
+data/processed/
+data/master/
+
+# 学習済みモデル（バイナリファイルは重いため）
+models/*.pkl
+
+# 環境設定
+.venv/
+venv/
+.env

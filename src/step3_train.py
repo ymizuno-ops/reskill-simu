@@ -8,8 +8,8 @@ from __future__ import annotations
 import os, json, pickle, time, warnings
 import pandas as pd
 import numpy as np
-from sklearn.linear_model    import Ridge
-from sklearn.ensemble        import RandomForestRegressor
+from sklearn.linear_model    import Ridge, ElasticNet
+from sklearn.ensemble        import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.preprocessing   import OneHotEncoder, StandardScaler, LabelEncoder
 from sklearn.pipeline        import Pipeline
 from sklearn.compose         import ColumnTransformer
@@ -165,6 +165,117 @@ class CatBoostWrapper(BaseEstimator, RegressorMixin):
         return self.model_.predict(X)
 
 
+# ══════════════════════════════════════════════════════
+# Stacking Ensemble
+# ══════════════════════════════════════════════════════
+class StackingEnsemble(BaseEstimator, RegressorMixin):
+    """
+    全ベースモデルのOOF（Out-of-Fold）予測をメタ特徴量として
+    Ridgeメタモデルで最終予測する2層アンサンブル。
+
+    設計:
+      Layer1 (base models): 訓練済みの全モデル（FEの有無を自動判定）
+      Layer2 (meta model) : Ridge回帰
+        - 入力: 各ベースモデルの予測値 + age + experience_years
+        - Ridge を使う理由: シンプルで過学習しにくく、
+          各モデルへの重みを線形結合で学習できる
+
+    FE_KEYS に含まれるモデルは predict 前に add_features を適用する。
+    """
+
+    FE_KEYS = frozenset({"custom", "xgboost", "elasticnet", "gradient_boosting"})
+
+    def __init__(self, base_models: dict, n_splits: int = 5, meta_alpha: float = 1.0):
+        """
+        Parameters
+        ----------
+        base_models : dict
+            step3_train.main() が返す models 辞書
+            {"model_key": {"pipeline": ..., ...}, ...}
+        n_splits    : OOFのfold数
+        meta_alpha  : メタRidgeの正則化強度
+        """
+        self.base_models = base_models
+        self.n_splits    = n_splits
+        self.meta_alpha  = meta_alpha
+
+    # ── 内部メソッド ──────────────────────────────
+    def _prepare_X(self, X: pd.DataFrame, key: str) -> pd.DataFrame:
+        """モデルキーに応じて特徴量エンジニアリングを適用"""
+        return add_features(X) if key in self.FE_KEYS else X.copy()
+
+    def _make_oof_matrix(self, X: pd.DataFrame, y: np.ndarray) -> np.ndarray:
+        """
+        全ベースモデルのOOF予測行列を作成する。
+        shape: (n_samples, n_base_models)
+        """
+        n         = len(y)
+        model_keys = list(self.base_models.keys())
+        oof_matrix = np.zeros((n, len(model_keys)))
+        kf         = KFold(n_splits=self.n_splits, shuffle=True, random_state=42)
+
+        for fold_idx, (tr_idx, val_idx) in enumerate(kf.split(X), 1):
+            X_tr  = X.iloc[tr_idx].reset_index(drop=True)
+            X_val = X.iloc[val_idx].reset_index(drop=True)
+            y_tr  = y[tr_idx]
+
+            for col_idx, key in enumerate(model_keys):
+                import copy
+                # モデルのディープコピーを fold ごとに再訓練
+                model_entry = self.base_models[key]
+                cloned = copy.deepcopy(model_entry["pipeline"])
+                cloned.fit(self._prepare_X(X_tr, key), y_tr)
+                oof_matrix[val_idx, col_idx] = cloned.predict(
+                    self._prepare_X(X_val, key)
+                )
+
+        return oof_matrix
+
+    def _make_meta_X(self, oof_or_pred: np.ndarray,
+                     X: pd.DataFrame) -> np.ndarray:
+        """
+        メタ特徴量 = ベースモデル予測値 + age + experience_years
+        age/experience_years を追加することで「年齢帯の系統誤差」を補正できる
+        """
+        structural = X[["age", "experience_years"]].values
+        return np.hstack([oof_or_pred, structural])
+
+    # ── 公開メソッド ──────────────────────────────
+    def fit(self, X: pd.DataFrame, y):
+        y = np.asarray(y)
+        model_keys = list(self.base_models.keys())
+
+        # Layer1: OOF予測行列を作成
+        print(f"    [Stacking] OOF予測中 ({len(model_keys)}モデル × {self.n_splits}fold)...",
+              end="", flush=True)
+        oof_matrix = self._make_oof_matrix(X, y)
+        print(" 完了")
+
+        # Layer1: 全データでベースモデルを再訓練（最終予測用）
+        self.fitted_bases_ = {}
+        for key in model_keys:
+            import copy
+            cloned = copy.deepcopy(self.base_models[key]["pipeline"])
+            cloned.fit(self._prepare_X(X, key), y)
+            self.fitted_bases_[key] = cloned
+
+        # Layer2: メタモデルを訓練
+        meta_X = self._make_meta_X(oof_matrix, X)
+        self.meta_model_ = Ridge(alpha=self.meta_alpha)
+        self.meta_model_.fit(meta_X, y)
+        self.model_keys_ = model_keys
+        return self
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        # 各ベースモデルの予測を並べる
+        base_preds = np.column_stack([
+            self.fitted_bases_[key].predict(self._prepare_X(X, key))
+            for key in self.model_keys_
+        ])
+        meta_X = self._make_meta_X(base_preds, X)
+        return self.meta_model_.predict(meta_X)
+
+
 # ──────────────────────────────────────────────────────
 # sklearn モデル
 # ──────────────────────────────────────────────────────
@@ -197,6 +308,62 @@ def train_custom_ridge(X, y):
     pre = make_ohe_preprocessor(num)
     pipe = Pipeline([("pre", pre), ("model", Ridge(alpha=1.0))])
     pipe, meta = _cv_and_fit(pipe, Xc, y, "Custom Ridge (+FE)")
+    meta["features"] = ["occupation", "age", "experience_years",
+                        "age_sq", "age_x_exp", "exp_ratio", "prime_age_flag"]
+    return pipe, meta
+
+
+# ──────────────────────────────────────────────────────
+# ElasticNet
+# ──────────────────────────────────────────────────────
+def train_elasticnet(X, y):
+    """
+    L1（Lasso）+ L2（Ridge）の両正則化を組み合わせたモデル。
+    不要な特徴量を自動で0にする効果（スパース性）があり解釈性が高い。
+    特徴量エンジニアリング込みで使用する。
+    """
+    Xc  = add_features(X)
+    num = ["age", "experience_years", "age_sq", "age_x_exp", "exp_ratio", "prime_age_flag"]
+    pre = make_ohe_preprocessor(num)
+    pipe = Pipeline([
+        ("pre", pre),
+        ("model", ElasticNet(
+            alpha=0.001,     # 正則化強度（チューニング済み）
+            l1_ratio=0.7,    # L1:L2 = 70:30（Lasso寄り・スパース性重視）
+            max_iter=5000,
+            random_state=42,
+        )),
+    ])
+    pipe, meta = _cv_and_fit(pipe, Xc, y, "ElasticNet (+FE)")
+    meta["features"] = ["occupation", "age", "experience_years",
+                        "age_sq", "age_x_exp", "exp_ratio", "prime_age_flag"]
+    return pipe, meta
+
+
+# ──────────────────────────────────────────────────────
+# Gradient Boosting (sklearn)
+# ──────────────────────────────────────────────────────
+def train_gradient_boosting(X, y):
+    """
+    sklearn 標準の勾配ブースティング。追加インストール不要。
+    XGBoost・LightGBMより低速だが安定性が高く、過学習に強い。
+    特徴量エンジニアリング込みで使用する。
+    """
+    Xc  = add_features(X)
+    num = ["age", "experience_years", "age_sq", "age_x_exp", "exp_ratio", "prime_age_flag"]
+    pre = make_ohe_preprocessor(num)
+    pipe = Pipeline([
+        ("pre", pre),
+        ("model", GradientBoostingRegressor(
+            n_estimators=300,
+            learning_rate=0.05,
+            max_depth=5,
+            min_samples_leaf=5,
+            subsample=0.8,
+            random_state=42,
+        )),
+    ])
+    pipe, meta = _cv_and_fit(pipe, Xc, y, "GradientBoosting (+FE)")
     meta["features"] = ["occupation", "age", "experience_years",
                         "age_sq", "age_x_exp", "exp_ratio", "prime_age_flag"]
     return pipe, meta
@@ -282,13 +449,75 @@ def train_xgboost(X, y):
 
 
 # ──────────────────────────────────────────────────────
+# Stacking Ensemble 訓練
+# ──────────────────────────────────────────────────────
+def train_stacking(X: pd.DataFrame, y, base_models: dict):
+    """
+    全ベースモデルを使った Stacking Ensemble を訓練する。
+
+    Parameters
+    ----------
+    base_models : 訓練済みモデル辞書（"stacking"自身は含まない）
+    """
+    import time
+    t0 = time.time()
+    print(f"  {'Stacking Ensemble':<32} OOF訓練中...")
+
+    stacking = StackingEnsemble(
+        base_models=base_models,
+        n_splits=5,
+        meta_alpha=1.0,
+    )
+
+    # CV: StackingEnsemble 自体を5-fold評価
+    # （内部でさらにOOFを使うためネストCVになる → 計算コスト大のため簡易評価）
+    # 簡易CV: 各foldでfitしてOOF R²を計算
+    cv_scores = []
+    kf = KFold(n_splits=5, shuffle=True, random_state=42)
+    y_arr = np.asarray(y)
+    for fold_i, (tr_idx, val_idx) in enumerate(kf.split(X), 1):
+        print(f"    CV fold {fold_i}/5...", end="", flush=True)
+        s_fold = StackingEnsemble(base_models=base_models, n_splits=4, meta_alpha=1.0)
+        s_fold.fit(X.iloc[tr_idx].reset_index(drop=True), y_arr[tr_idx])
+        pred = s_fold.predict(X.iloc[val_idx].reset_index(drop=True))
+        from sklearn.metrics import r2_score
+        score = r2_score(y_arr[val_idx], pred)
+        cv_scores.append(score)
+        print(f" R²={score:.4f}")
+
+    cv_arr = np.array(cv_scores)
+
+    # 全データで最終訓練
+    print(f"    最終訓練中（全データ）...", end="", flush=True)
+    stacking.fit(X, y_arr)
+    print(" 完了")
+
+    r2  = r2_score(y_arr, stacking.predict(X))
+    mae = mean_absolute_error(y_arr, stacking.predict(X))
+    elapsed = time.time() - t0
+
+    print(f"  {'Stacking Ensemble':<32} R²={r2:.4f}  CV={cv_arr.mean():.4f}±{cv_arr.std():.4f}"
+          f"  MAE={mae:.1f}万円  ({elapsed:.1f}s)")
+
+    meta = {
+        "r2_train":   round(r2, 4),
+        "r2_cv_mean": round(cv_arr.mean(), 4),
+        "r2_cv_std":  round(cv_arr.std(), 4),
+        "mae_train":  round(mae, 2),
+        "features":   ["occupation", "age", "experience_years"],
+        "base_models": list(base_models.keys()),
+    }
+    return stacking, meta
+
+
+# ──────────────────────────────────────────────────────
 # メイン
 # ──────────────────────────────────────────────────────
 def main():
     np.random.seed(42)
 
     print("\n" + "=" * 65)
-    print("  Step3: モデル訓練（sklearn + LightGBM / CatBoost / XGBoost）")
+    print("  Step3: モデル訓練（sklearn 5モデル + LightGBM / CatBoost / XGBoost）")
     print("=" * 65 + "\n")
 
     df = pd.read_csv(os.path.join(MASTER_DIR, "ml_dataset.csv"))
@@ -308,6 +537,8 @@ def main():
     ridge_pipe,  ridge_meta  = train_ridge(X, y)
     rf_pipe,     rf_meta     = train_random_forest(X, y)
     custom_pipe, custom_meta = train_custom_ridge(X, y)
+    en_pipe,     en_meta     = train_elasticnet(X, y)
+    gb_pipe,     gb_meta     = train_gradient_boosting(X, y)
 
     models = {
         "ridge": {
@@ -326,6 +557,18 @@ def main():
             "pipeline": custom_pipe, "meta": custom_meta,
             "label": "Custom Ridge（特徴量強化型）",
             "desc":  "年齢²・交互作用項を追加した高精度線形モデル。",
+            "uses_fe": True,
+        },
+        "elasticnet": {
+            "pipeline": en_pipe, "meta": en_meta,
+            "label": "ElasticNet（L1+L2正則化）",
+            "desc":  "RidgeとLassoの融合。不要な特徴量を自動で除外し解釈性が高い。",
+            "uses_fe": True,
+        },
+        "gradient_boosting": {
+            "pipeline": gb_pipe, "meta": gb_meta,
+            "label": "Gradient Boosting（sklearn標準）",
+            "desc":  "追加インストール不要の勾配ブースティング。安定性と精度のバランスが良い。",
             "uses_fe": True,
         },
     }
@@ -367,6 +610,22 @@ def main():
         }
     else:
         print("  ⚠ XGBoost スキップ（pip install xgboost）")
+
+    # ── Stacking Ensemble（全ベースモデルが揃ってから訓練）──
+    print()
+    print("[Stacking Ensemble]")
+    print("  ※ ネストCVのため時間がかかります（5〜15分）")
+    try:
+        stacking_model, stacking_meta = train_stacking(X, y, models)
+        models["stacking"] = {
+            "pipeline": stacking_model,
+            "meta":     stacking_meta,
+            "label":    "Stacking Ensemble（全モデル統合）",
+            "desc":     f"全{len(models)}ベースモデルのOOF予測をRidgeで統合。最高精度を目指す。",
+            "uses_fe":  False,   # StackingEnsemble内部で処理するため不要
+        }
+    except Exception as e:
+        print(f"  ⚠ Stacking スキップ: {e}")
 
     # ── 保存 ──
     pkl_path = os.path.join(MODEL_DIR, "models.pkl")

@@ -42,6 +42,40 @@
     "label": "Custom Ridge（特徴量強化型）",
     "desc": "年齢²・交互作用項を追加した高精度線形モデル。"
   },
+  "elasticnet": {
+    "r2_train": 0.8618,
+    "r2_cv_mean": 0.8509,
+    "r2_cv_std": 0.0165,
+    "mae_train": 47.81,
+    "features": [
+      "occupation",
+      "age",
+      "experience_years",
+      "age_sq",
+      "age_x_exp",
+      "exp_ratio",
+      "prime_age_flag"
+    ],
+    "label": "ElasticNet（L1+L2正則化）",
+    "desc": "RidgeとLassoの融合。不要な特徴量を自動で除外し解釈性が高い。"
+  },
+  "gradient_boosting": {
+    "r2_train": 0.8893,
+    "r2_cv_mean": 0.8534,
+    "r2_cv_std": 0.0197,
+    "mae_train": 61.46,
+    "features": [
+      "occupation",
+      "age",
+      "experience_years",
+      "age_sq",
+      "age_x_exp",
+      "exp_ratio",
+      "prime_age_flag"
+    ],
+    "label": "Gradient Boosting（sklearn標準）",
+    "desc": "追加インストール不要の勾配ブースティング。安定性と精度のバランスが良い。"
+  },
   "lightgbm": {
     "r2_train": 0.929,
     "r2_cv_mean": 0.8828,
@@ -84,5 +118,28 @@
     ],
     "label": "XGBoost（勾配ブースティング標準）",
     "desc": "業界標準モデル。特徴量エンジニアリング込みで高精度。"
+  },
+  "stacking": {
+    "r2_train": 0.9653,
+    "r2_cv_mean": 0.8385,
+    "r2_cv_std": 0.0578,
+    "mae_train": 28.44,
+    "features": [
+      "occupation",
+      "age",
+      "experience_years"
+    ],
+    "base_models": [
+      "ridge",
+      "random_forest",
+      "custom",
+      "elasticnet",
+      "gradient_boosting",
+      "lightgbm",
+      "catboost",
+      "xgboost"
+    ],
+    "label": "Stacking Ensemble（全モデル統合）",
+    "desc": "全8ベースモデルのOOF予測をRidgeで統合。最高精度を目指す。"
   }
 }

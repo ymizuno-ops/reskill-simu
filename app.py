@@ -14,6 +14,13 @@ import matplotlib.ticker as mticker
 warnings.filterwarnings("ignore")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
+# pickle で保存したモデルの復元に必要なクラスを事前インポート
+# （step3_train.py のモジュールレベルクラスを app.py 側でも認識させる）
+try:
+    from step3_train import LGBMWrapper, CatBoostWrapper, StackingEnsemble  # noqa: F401
+except ImportError:
+    pass  # ライブラリ未インストール時はスキップ
+
 # ── 日本語フォント（OS問わず自動検出）────────────────────
 def _set_jp_font():
     import matplotlib.font_manager as fm
@@ -159,24 +166,26 @@ def _add_features(X: pd.DataFrame) -> pd.DataFrame:
 
 
 # 特徴量エンジニアリングが必要なモデルキーのセット
-_FE_MODELS = {"custom", "xgboost"}
+_FE_MODELS = {"custom", "xgboost", "elasticnet", "gradient_boosting"}
 
 
 def predict(models: dict, model_key: str,
             occupation: str, age: float, experience: float) -> float:
     """
     モデルの種類に応じて前処理を適用して予測する。
-    - sklearn Pipeline系  : X をそのまま渡す（パイプライン内で処理）
-    - LightGBM/CatBoost系 : Wrapper クラスがエンコーディングを内包
-    - Custom/XGBoost      : 特徴量エンジニアリングを追加してから渡す
+    - sklearn Pipeline系      : X をそのまま渡す（パイプライン内で処理）
+    - LightGBM/CatBoost系     : Wrapper クラスがエンコーディングを内包
+    - Custom/XGBoost/ElasticNet/GradientBoosting : FEを追加してから渡す
+    - StackingEnsemble        : FE処理は内部で実施、X のまま渡す
     """
     m = models[model_key]
     X = pd.DataFrame([{
-        "occupation":      occupation,
-        "age":             float(age),
+        "occupation":       occupation,
+        "age":              float(age),
         "experience_years": float(experience),
     }])
-    if model_key in _FE_MODELS:
+    # StackingEnsemble は内部でFEを処理するため追加不要
+    if model_key != "stacking" and model_key in _FE_MODELS:
         X = _add_features(X)
     return float(m["pipeline"].predict(X)[0])
 
@@ -584,12 +593,15 @@ def render_sidebar(occ_list, models, macro):
     st.sidebar.markdown("### 🤖 予測モデル選択")
     # 利用可能モデルを動的に構築（pkl に存在するモデルのみ表示）
     _all_model_options = {
-        "Ridge（安定型）":                   "ridge",
-        "Random Forest（変動型）":           "random_forest",
-        "Custom Ridge（特徴量強化型）":      "custom",
-        "LightGBM（高速ブースティング）":    "lightgbm",
-        "CatBoost（カテゴリ変数特化）":      "catboost",
-        "XGBoost（勾配ブースティング）":     "xgboost",
+        "Ridge（安定型）":                      "ridge",
+        "ElasticNet（L1+L2正則化）":            "elasticnet",
+        "Custom Ridge（特徴量強化型）":         "custom",
+        "Random Forest（変動型）":              "random_forest",
+        "Gradient Boosting（sklearn標準）":     "gradient_boosting",
+        "LightGBM（高速ブースティング）":       "lightgbm",
+        "CatBoost（カテゴリ変数特化）":         "catboost",
+        "XGBoost（勾配ブースティング）":        "xgboost",
+        "Stacking Ensemble（全モデル統合）":   "stacking",
     }
     # pkl に含まれているモデルのみ選択肢に出す
     available_models = {
@@ -731,7 +743,7 @@ def _render_skill_transfer_table(
 
     with st.expander(
         f"📊 スキル引継ぎ率ガイド　※ベースライン: {target_occ[:15]} の {base_label} 平均年収 {base_income:.0f}万円",
-        expanded=True,
+        expanded=False,
     ):
         st.markdown(header + body + footer, unsafe_allow_html=True)
 
@@ -902,15 +914,20 @@ def main():
     )
 
     # 全モデル計算（グラフ比較用）
-    MODEL_KEYS   = [k for k in ["ridge", "random_forest", "custom",
-                                 "lightgbm", "catboost", "xgboost"] if k in models]
+    MODEL_KEYS   = [k for k in ["ridge", "elasticnet", "custom",
+                                 "random_forest", "gradient_boosting",
+                                 "lightgbm", "catboost", "xgboost",
+                                 "stacking"] if k in models]
     MODEL_LABELS_MAP = {
-        "ridge":         "Ridge（安定型）",
-        "random_forest": "Random Forest",
-        "custom":        "Custom Ridge",
-        "lightgbm":      "LightGBM",
-        "catboost":      "CatBoost",
-        "xgboost":       "XGBoost",
+        "ridge":             "Ridge",
+        "elasticnet":        "ElasticNet",
+        "custom":            "Custom Ridge",
+        "random_forest":     "Random Forest",
+        "gradient_boosting": "GradientBoosting",
+        "lightgbm":          "LightGBM",
+        "catboost":          "CatBoost",
+        "xgboost":           "XGBoost",
+        "stacking":          "Stacking",
     }
     MODEL_LABELS = [MODEL_LABELS_MAP[k] for k in MODEL_KEYS]
     sq_all, cc_all, roi_all = [], [], []
@@ -928,14 +945,6 @@ def main():
         sq_all.append(s)
         cc_all.append(c)
         roi_all.append((be, benefit))
-
-    # ── 引継ぎ率説明表 ──
-    st.markdown("---")
-    _render_skill_transfer_table(
-        models, p["model_key"],
-        p["target_occ"], p["current_age"], p["current_exp"],
-        p["current_income"], AGE_ALL_PATH,
-    )
 
     # ── 分析結果セクション ──
     st.markdown("### 📋 分析結果")
@@ -977,7 +986,45 @@ def main():
                         unsafe_allow_html=True,
                     )
 
-    # ── 3モデル比較グラフ ──
+        # ── 各モデルの特徴説明 ──
+        st.markdown("---")
+        st.markdown("#### 📖 各モデルの特徴と使い分け")
+        MODEL_DESCRIPTIONS = [
+            ("🔵 Ridge Regression",      "linear",   "線形回帰にL2正則化を加えたシンプルモデル。職種・年齢・経験年数の主効果を線形に捉える。過学習しにくく安定した予測が特徴。標準的なキャリアパスの基準として使いやすい。"),
+            ("🔵 ElasticNet",            "linear",   "RidgeとLassoを融合した線形モデル。不要な特徴量の係数を自動でゼロに近づける（スパース性）。解釈性が高く、影響の強い特徴量を絞り込んで学習する。"),
+            ("🔵 Custom Ridge",          "linear",   "年齢²・年齢×経験年数の交互作用項など独自特徴量を追加した線形モデル。給与ピーク帯（35〜54歳）のフラグも組み込み、年収カーブの非線形な動きを線形モデルで近似する。"),
+            ("🟢 Random Forest",         "tree",     "複数の決定木を組み合わせたバギングモデル。職種ごとの細かい条件分岐を学習するが、外挿（訓練データ範囲外の予測）が苦手。CV精度は低めだが、特定職種の上振れ・下振れシナリオ確認に有効。"),
+            ("🟢 Gradient Boosting",     "tree",     "弱い決定木を順番に積み上げてエラーを修正する勾配ブースティング。sklearnの標準実装で追加インストール不要。XGBoostより低速だが安定性が高く、過学習に強い。"),
+            ("🟡 LightGBM",              "boosting", "MicrosoftのLightGBMは葉ごとに成長する「Leaf-wise」戦略で高速。職種名をカテゴリ変数としてネイティブに処理でき、OHEが不要。大規模データでも実用的な速度で学習できる。"),
+            ("🟡 CatBoost",              "boosting", "Yandexのカテゴリ特化ブースティング。Target Encodingを対称木とともに最適化する独自手法で職種名を扱う。ハイパーパラメータのデフォルト値が優秀でチューニング不要でも高精度。"),
+            ("🟡 XGBoost",               "boosting", "勾配ブースティングの業界標準。L1/L2正則化・欠損値の自動処理・並列化など多くの最適化を備える。特徴量エンジニアリング（FE）を組み合わせることでさらに精度が向上。"),
+            ("🏆 Stacking Ensemble",     "ensemble", "全ベースモデルのOOF（Out-of-Fold）予測をメタ特徴量としてRidgeで統合する2層アンサンブル。単一モデルでは捉えられない「モデル間の誤差の相補関係」を学習し、理論上最高精度を目指す。ただし訓練時間は最長。"),
+        ]
+        type_color = {"linear": "#4F8EF7", "tree": "#4CAF50", "boosting": "#FF9800", "ensemble": "#E040FB"}
+        type_label = {"linear": "線形系", "tree": "ツリー系", "boosting": "ブースティング系", "ensemble": "アンサンブル"}
+
+        for model_name, mtype, desc in MODEL_DESCRIPTIONS:
+            clr = type_color[mtype]
+            lbl = type_label[mtype]
+            st.markdown(
+                f"<div style='border-left:3px solid {clr};padding:.4rem .8rem;margin:.35rem 0;"
+                f"background:rgba(255,255,255,0.03);border-radius:0 6px 6px 0'>"
+                f"<span style='font-weight:700;color:{clr}'>{model_name}</span>"
+                f"<span style='font-size:.7rem;background:{clr}22;color:{clr};"
+                f"border-radius:4px;padding:1px 6px;margin-left:8px'>{lbl}</span>"
+                f"<div style='font-size:.82rem;color:#ccc;margin-top:.25rem'>{desc}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    # ── スキル引継ぎ率ガイド（デフォルト閉じた状態・精度情報の下に移動）──
+    _render_skill_transfer_table(
+        models, p["model_key"],
+        p["target_occ"], p["current_age"], p["current_exp"],
+        p["current_income"], AGE_ALL_PATH,
+    )
+
+    # ── 全モデル比較グラフ ──
     st.markdown(f'<div class="sec-hdr">📉 全{len(MODEL_KEYS)}モデル比較グラフ</div>', unsafe_allow_html=True)
     fig3 = plot_all_models(sq_all, cc_all, p["current_age"],
                         [r[0] for r in roi_all], MODEL_LABELS)

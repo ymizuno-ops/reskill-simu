@@ -10,7 +10,7 @@
       "experience_years"
     ],
     "label": "Ridge Regression（安定型）",
-    "desc": "過学習を抑えた線形回帰。平均的・標準的なキャリアパスの推計に最適。"
+    "desc": "過学習を抑えた線形回帰。標準的なキャリアパスの推計に最適。"
   },
   "random_forest": {
     "r2_train": 0.5878,
@@ -23,7 +23,7 @@
       "experience_years"
     ],
     "label": "Random Forest（変動型）",
-    "desc": "職種固有の昇給パターンを細かく学習。上振れ・下振れシナリオの確認に。"
+    "desc": "職種固有の昇給パターンを細かく学習。上振れ・下振れ確認に。"
   },
   "custom": {
     "r2_train": 0.8628,
@@ -40,6 +40,49 @@
       "prime_age_flag"
     ],
     "label": "Custom Ridge（特徴量強化型）",
-    "desc": "年齢²・交互作用項を追加した高精度モデル。"
+    "desc": "年齢²・交互作用項を追加した高精度線形モデル。"
+  },
+  "lightgbm": {
+    "r2_train": 0.929,
+    "r2_cv_mean": 0.8828,
+    "r2_cv_std": 0.0311,
+    "mae_train": 32.88,
+    "features": [
+      "occupation",
+      "age",
+      "experience_years"
+    ],
+    "label": "LightGBM（高速ブースティング）",
+    "desc": "カテゴリ変数ネイティブ対応。高速かつ高精度。"
+  },
+  "catboost": {
+    "r2_train": 0.7815,
+    "r2_cv_mean": 0.881,
+    "r2_cv_std": 0.0314,
+    "mae_train": 53.71,
+    "features": [
+      "occupation",
+      "age",
+      "experience_years"
+    ],
+    "label": "CatBoost（カテゴリ変数特化）",
+    "desc": "職種名をそのまま入力可。チューニング不要で高精度。"
+  },
+  "xgboost": {
+    "r2_train": 0.9556,
+    "r2_cv_mean": 0.9239,
+    "r2_cv_std": 0.0088,
+    "mae_train": 35.93,
+    "features": [
+      "occupation",
+      "age",
+      "experience_years",
+      "age_sq",
+      "age_x_exp",
+      "exp_ratio",
+      "prime_age_flag"
+    ],
+    "label": "XGBoost（勾配ブースティング標準）",
+    "desc": "業界標準モデル。特徴量エンジニアリング込みで高精度。"
   }
 }

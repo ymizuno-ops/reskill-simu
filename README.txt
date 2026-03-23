@@ -52,50 +52,304 @@ reskill-simu/
 セットアップ手順
 --------------------------------------------------------------------------------
 
-【1】依存ライブラリのインストール
+動作確認済み環境:
+  OS      : Windows 10/11 / macOS 13+ / Ubuntu 22.04
+  Python  : 3.10 以上（3.11 推奨）
+  メモリ  : 8GB 以上推奨（Stacking Ensemble 訓練時は 16GB 推奨）
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Step 0  GitHub からファイルを取得
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ▼ 方法 A：git clone（Git がインストール済みの場合・推奨）
+
+    # Git のインストール確認
+    git --version
+    # → git version 2.x.x と表示されれば OK
+    # → 表示されない場合は https://git-scm.com/ からインストール
+
+    # リポジトリをクローン
+    git clone https://github.com/<ユーザー名>/reskill-simu.git
+
+    # プロジェクトフォルダへ移動
+    cd reskill-simu
+
+  ▼ 方法 B：ZIP ダウンロード（Git を使わない場合）
+
+    ① ブラウザで GitHub のリポジトリページを開く
+       https://github.com/<ユーザー名>/reskill-simu
+
+    ② 緑色の「Code」ボタンをクリック →「Download ZIP」を選択
+
+    ③ ダウンロードした ZIP を任意のフォルダに展開
+
+    ④ 展開されたフォルダに移動
+       # Windows（エクスプローラーでフォルダを開き、アドレスバーに cmd と入力する方法でも可）
+       cd C:\Users\<ユーザー名>\Downloads\reskill-simu-main
+
+       # macOS / Linux
+       cd ~/Downloads/reskill-simu-main
+
+  ▼ 取得後のフォルダ構成確認
+
+    # Windows
+    dir
+
+    # macOS / Linux
+    ls -la
+
+    確認すべき項目:
+      app.py               ← Streamlit アプリ本体
+      requirements.txt     ← 依存ライブラリ一覧
+      src/                 ← データ処理・訓練スクリプト
+      data/raw/            ← e-stat データの配置先（中身は空）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Step 1  Python 仮想環境の作成（推奨）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    # 仮想環境を作成（プロジェクトルートで実行）
+    python -m venv .venv
+
+    # 仮想環境を有効化
+    # Windows:
+    .venv\Scripts\activate
+
+    # macOS / Linux:
+    source .venv/bin/activate
+
+    # 有効化できているか確認（パスに .venv が含まれていれば OK）
+    where python   # Windows
+    which python   # macOS / Linux
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Step 2  依存ライブラリのインストール
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    # 基本ライブラリを一括インストール
     pip install -r requirements.txt
 
-    ※ LightGBM / CatBoost / XGBoost は以下でインストール
+    # 勾配ブースティング系モデルを使う場合は追加インストール
+    # （なくても Ridge / ElasticNet / Random Forest / Gradient Boosting の 5 モデルで動作します）
     pip install lightgbm catboost xgboost
 
+    # インストール確認
+    python -c "import streamlit, sklearn, lightgbm, catboost, xgboost; print('OK')"
 
-【2】e-stat からデータを取得
+  ■ よくあるエラー
+    ERROR: Failed building wheel for lightgbm
+    → pip install --upgrade pip setuptools wheel を実行してから再度試してください。
 
-    以下の URL からデータをダウンロードし、対応するサブディレクトリに配置します。
+    ERROR: Microsoft Visual C++ 14.0 is required  （Windows のみ）
+    → https://visualstudio.microsoft.com/visual-cpp-build-tools/ から
+      "Build Tools for Visual Studio" をインストールしてください。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Step 3  e-stat からデータを取得・配置
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ▼ ダウンロード先 URL
     https://www.e-stat.go.jp/
 
-    データ名                              配置先サブディレクトリ
-    ──────────────────────────────────────────────────────────────
-    職種別きまって支給する現金給与額      職種別きまって支給する現金給与額/
-    年齢階級別きまって支給する現金給与額  年齢階級別きまって支給する現金給与額/
-    経験年数階級別きまって支給する        経験年数階級別きまって支給する現金給与額/
-      現金給与額
-    国民経済計算（GDP統計）               国民経済計算_GDP統計/
-    消費者物価指数                        消費者物価指数/
-    毎月勤労統計調査 結果確報             毎月勤労統計調査_結果確報/
+  ▼ 取得するデータと配置先（data/raw/ 以下）
 
-    ※ .xls 形式のファイルは LibreOffice で .xlsx に変換してから配置してください。
-       LibreOffice がインストールされている場合は自動変換も可能です。
+  【賃金構造基本統計調査】── 厚生労働省
+    検索キーワード：「賃金構造基本統計調査」
 
+    ┌─────────────────────────────────────────────────────────────────┐
+    │ 調査名                              配置先フォルダ               │
+    ├─────────────────────────────────────────────────────────────────┤
+    │ 職種別きまって支給する現金給与額    職種別きまって支給する現金給与額/    │
+    │ 年齢階級別きまって支給する現金給与額 年齢階級別きまって支給する現金給与額/ │
+    │ 経験年数階級別きまって支給する      経験年数階級別きまって支給する現金給与額/ │
+    │   現金給与額                                                     │
+    └─────────────────────────────────────────────────────────────────┘
 
-【3】データ処理・モデル訓練（初回のみ）
+    取得年次：2006〜2024 年分（各年 1 ファイル）
+    ファイル形式：.xlsx（または .xls → 後述の変換手順参照）
 
-    # Step1: raw データを processed CSV に変換
+  【国民経済計算（GDP 統計）】── 内閣府
+    検索キーワード：「国民経済計算 年次推計 実質 GDP」
+    配置先：国民経済計算_GDP統計/
+    取得年次：1994〜2024 年度
+    ファイル形式：.csv
+
+  【消費者物価指数（CPI）】── 総務省
+    検索キーワード：「消費者物価指数 長期時系列 総合」
+    配置先：消費者物価指数/
+    取得年次：1970〜2024 年
+    ファイル形式：.xlsx
+
+  【毎月勤労統計調査 結果確報】── 厚生労働省
+    検索キーワード：「毎月勤労統計調査 結果確報 きまって支給する給与」
+    配置先：毎月勤労統計調査_結果確報/
+    取得年次：2008〜2024 年
+    ファイル形式：.xlsx
+
+  ▼ .xls ファイルの .xlsx への変換（必須）
+
+    xlrd ライブラリが旧形式 .xls を読み込めないため、
+    .xlsx 形式への変換が必要です。以下のいずれかの方法で変換してください。
+
+    方法 A：LibreOffice（推奨）
+      ① LibreOffice をインストール（https://www.libreoffice.org/）
+      ② .xls ファイルを LibreOffice Calc で開き、
+         「名前を付けて保存」→「Microsoft Excel 2007-365 (.xlsx)」で保存
+      ③ 変換後の .xlsx を対応フォルダに配置
+
+    方法 B：Microsoft Excel（Windows / macOS）
+      ① .xls ファイルを Excel で開く
+      ② 「名前を付けて保存」→「Excel ブック (.xlsx)」で保存
+      ③ 変換後の .xlsx を対応フォルダに配置
+
+    方法 C：コマンドライン（LibreOffice がインストール済みの場合）
+      # フォルダ内の .xls をまとめて .xlsx に変換
+      soffice --headless --convert-to xlsx data/raw/職種別きまって支給する現金給与額/*.xls
+
+  ▼ 配置後のフォルダ確認
+
+    data/raw/
+    ├── 職種別きまって支給する現金給与額/
+    │   ├── 2006年_職種別....xlsx
+    │   ├── 2007年_職種別....xlsx
+    │   ┆   （2006〜2024 年、計 24 ファイル程度）
+    ├── 年齢階級別きまって支給する現金給与額/
+    │   ┆   （2006〜2024 年、計 19 ファイル程度）
+    ├── 経験年数階級別きまって支給する現金給与額/
+    │   ┆   （2006〜2024 年、計 19 ファイル程度）
+    ├── 国民経済計算_GDP統計/
+    │   ┆   （.csv ファイル）
+    ├── 消費者物価指数/
+    │   ┆   （.xlsx ファイル）
+    └── 毎月勤労統計調査_結果確報/
+        ┆   （2008〜2024 年、計 17 ファイル程度）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Step 4  データ処理（初回のみ）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    # Step1: raw データを整形済み CSV に変換（約 1〜2 分）
     python src/step1_to_processed.py
 
-    # Step2: ML 用マスターデータを構築
+    # Step2: ML 用マスターデータを構築（約 30 秒）
     python src/step2_to_master.py
 
-    # Step3: 全モデルを訓練・保存（Stacking を含む場合は 10〜20 分程度）
+  ▼ 正常完了の確認
+
+    # 以下のファイルが生成されていれば OK
+    data/processed/occupation_wage_all.csv   （約 3,700 行）
+    data/processed/age_wage_all.csv          （約 8,600 行）
+    data/processed/experience_wage_all.csv   （約 82,000 行）
+    data/processed/monthly_labor_all.csv
+    data/processed/gdp_annual.csv
+    data/processed/cpi_annual.csv
+    data/master/occupation_list.csv          （148 職種）
+    data/master/ml_dataset.csv              （約 5,578 行）
+    data/master/age_curve.csv
+    data/master/exp_curve.csv
+    data/master/macro_params.json
+
+  ■ よくあるエラー
+    FileNotFoundError: data/raw/職種別.../... が見つかりません
+    → Step 3 でファイルを正しいフォルダに配置したか確認してください。
+
+    KeyError: ...列が見つかりません
+    → .xls ファイルが .xlsx に変換されているか確認してください。
+      未変換の .xls が混在している可能性があります。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Step 5  モデル訓練（初回のみ）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    # 全モデルを訓練・保存
     python src/step3_train.py
 
+  ▼ 訓練時間の目安
 
-【4】アプリ起動
+    sklearn 5 モデル（Ridge / ElasticNet / Custom Ridge / RF / GBM）
+      合計約 2〜3 分
+
+    LightGBM / CatBoost / XGBoost（インストール済みの場合）
+      合計約 5〜10 分
+
+    Stacking Ensemble（全ベースモデルが揃っている場合）
+      ネスト CV のため 10〜20 分程度
+
+    ※ Stacking が長すぎる場合は Ctrl+C で中断しても、
+      それ以前のモデルは models.pkl に保存されており、アプリは起動できます。
+
+  ▼ 正常完了の確認
+
+    # 以下のファイルが生成されていれば OK
+    models/models.pkl        （LightGBM 等なしの場合: 約 5MB / 全モデルの場合: 約 30MB）
+    models/model_meta.json
+
+    # models.pkl の内容を確認するコマンド
+    python -c "
+    import pickle
+    with open('models/models.pkl', 'rb') as f:
+        m = pickle.load(f)
+    for k, v in m.items():
+        print(k, '  CV R²=', v['meta']['r2_cv_mean'])
+    "
+
+  ■ よくあるエラー
+    AttributeError: Can't get local object 'train_lightgbm.<locals>.LGBMWrapper'
+    → step3_train.py が古いバージョンです。最新版に差し替えてください。
+
+    ModuleNotFoundError: No module named 'lightgbm'
+    → pip install lightgbm でインストールするか、
+      インストールしない場合は sklearn の 5 モデルのみで動作します。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Step 6  アプリの起動
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     streamlit run app.py
 
-    ブラウザで http://localhost:8501 を開いてください。
+    # 自動でブラウザが開きます。開かない場合は以下の URL にアクセスしてください。
+    # http://localhost:8501
+
+  ▼ 起動後の操作手順
+
+    ① サイドバーの「プロフィール設定」に年齢・勤続年数・年収を入力
+    ② 「キャリア選択」で現職名と目標職種名を選ぶ（大分類でフィルタ可）
+    ③ 「スキル引継ぎ率」を設定（0% = 完全未経験 / 100% = 即戦力）
+    ④ 必要に応じて「リアリティ補正」スライダーで保守的なシナリオに調整
+    ⑤「🚀 シミュレーション実行」ボタンをクリック
+    ⑥ 分析結果・年収推移グラフ・全モデル比較グラフを確認
+
+  ■ よくあるエラー
+    起動エラー: Can't get attribute 'LGBMWrapper'
+    → app.py が古いバージョンです。最新版に差し替えてください。
+      （app.py の先頭付近に from step3_train import LGBMWrapper が必要です）
+
+    起動エラー: models.pkl が見つかりません
+    → Step 5 のモデル訓練が完了していません。
+      python src/step3_train.py を実行してください。
+
+    グラフの日本語が文字化けする
+    → 日本語フォントが自動検出されています。
+      それでも文字化けする場合は pip install japanize-matplotlib を実行してください。
+
+    ModuleNotFoundError: No module named 'streamlit'
+    → 仮想環境が有効化されていない可能性があります。
+      .venv\Scripts\activate（Windows）または source .venv/bin/activate（Mac/Linux）
+      を実行してから再度試してください。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+データ更新手順（毎年 e-stat に新データが公開されたとき）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ① 最新年のファイルを e-stat からダウンロードし、対応フォルダに配置
+    ② .xls は .xlsx に変換してから配置
+    ③ 以下のコマンドを順に実行（Step1〜3 の再実行）
+
+    python src/step1_to_processed.py
+    python src/step2_to_master.py
+    python src/step3_train.py
+
+    ④ streamlit run app.py でアプリを起動して結果を確認
 
 
 --------------------------------------------------------------------------------

@@ -10,3 +10,4 @@ blinker>=1.7.0
 lightgbm>=4.0.0
 catboost>=1.2.0
 xgboost>=2.0.0
+st-theme>=1.2.3

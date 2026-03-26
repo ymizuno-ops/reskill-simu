@@ -1,3 +1,5 @@
+# app.py ─ リスキリング年収シミュレーター (全ガイド実装版)
+
 from __future__ import annotations
 import os
 import sys
@@ -36,7 +38,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Streamlitのネイティブ変数を利用することで、テーマ自動追従と独自フォントサイズを両立
 st.markdown(
     """
 <style>
@@ -708,6 +709,9 @@ def render_sidebar(
     )
 
 
+# ══════════════════════════════════════════════════════
+# 各種ガイド描画関数
+# ══════════════════════════════════════════════════════
 def _render_skill_transfer_table(
     models: Dict[str, Any],
     model_key: str,
@@ -748,7 +752,6 @@ def _render_skill_transfer_table(
         )
 
     df = pd.DataFrame(data)
-
     with st.expander(
         f"📊 スキル引継ぎ率ガイド　※ベースライン: {target_occ[:15]} の {base_label} 平均年収 {base_income:.0f}万円",
         expanded=False,
@@ -756,6 +759,113 @@ def _render_skill_transfer_table(
         st.dataframe(df, use_container_width=True, hide_index=True)
 
 
+def _render_macro_guide() -> None:
+    gdp_data = [
+        {
+            "期待GDP成長率": "-2.0%",
+            "シナリオの意味": "深刻な不況。賃金水準全体が低下する悲観シナリオ。",
+        },
+        {
+            "期待GDP成長率": "0.0%",
+            "シナリオの意味": "ゼロ成長。経済が停滞し、昇給は年齢・経験カーブのみに依存。",
+        },
+        {
+            "期待GDP成長率": "1.0%",
+            "シナリオの意味": "緩やかな成長。過去10年間の日本経済の平均的な水準（標準）。",
+        },
+        {
+            "期待GDP成長率": "2.0%〜",
+            "シナリオの意味": "安定成長。インフレに連動した健全なベースアップが見込める楽観シナリオ。",
+        },
+    ]
+    cpi_data = [
+        {
+            "将来のCPI": "90",
+            "シナリオの意味": "デフレ進行。物価が下落し、名目賃金の上昇が強く抑えられる。",
+        },
+        {
+            "将来のCPI": "105",
+            "シナリオの意味": "現状維持。直近の緩やかなインフレ傾向の継続（標準）。",
+        },
+        {
+            "将来のCPI": "120",
+            "シナリオの意味": "マイルドインフレ。物価上昇に合わせて賃金への還元が進む。",
+        },
+        {
+            "将来のCPI": "140",
+            "シナリオの意味": "高インフレ。急激な物価高騰による名目賃金の上押し圧力。",
+        },
+    ]
+    with st.expander("🌍 マクロ経済シナリオガイド（GDP・CPI）", expanded=False):
+        st.markdown("将来の日本全体の名目賃金上昇率に影響を与えます。")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.dataframe(
+                pd.DataFrame(gdp_data), use_container_width=True, hide_index=True
+            )
+        with col2:
+            st.dataframe(
+                pd.DataFrame(cpi_data), use_container_width=True, hide_index=True
+            )
+
+
+def _render_risk_guide() -> None:
+    raise_data = [
+        {
+            "転職後の昇給抑制": "0%",
+            "シナリオの意味": "抑制なし。AI予測通りの標準的な昇給を享受できる（理想的）。",
+        },
+        {
+            "転職後の昇給抑制": "10%",
+            "シナリオの意味": "軽微なビハインド。キャッチアップ期間として序盤の昇給がやや遅れる。",
+        },
+        {
+            "転職後の昇給抑制": "30%",
+            "シナリオの意味": "現実的な壁。未経験領域の評価構築に時間がかかり、昇給ペースが3割減速。",
+        },
+        {
+            "転職後の昇給抑制": "50%",
+            "シナリオの意味": "厳しい下積み。最初の数年間はベースアップがほぼ期待できない保守的シナリオ。",
+        },
+    ]
+    risk_data = [
+        {
+            "キャリアリスク係数": "0%",
+            "シナリオの意味": "リスクなし。生涯にわたり継続的に最新スキルをキャッチアップできる前提。",
+        },
+        {
+            "キャリアリスク係数": "10%",
+            "シナリオの意味": "標準的な陳腐化。中堅層以降で技術変化により若干の年収頭打ちが発生。",
+        },
+        {
+            "キャリアリスク係数": "20%",
+            "シナリオの意味": "シニア期の停滞。プレイングマネージャーとしての給与限界に直面する。",
+        },
+        {
+            "キャリアリスク係数": "30%",
+            "シナリオの意味": "スキルの陳腐化。技術パラダイムシフト等で10年後以降に市場価値が目減りする。",
+        },
+    ]
+    with st.expander(
+        "🛡️ リアリティ補正シナリオガイド（昇給抑制・キャリアリスク）", expanded=False
+    ):
+        st.markdown(
+            "AIモデルが算出した「理想的な予測」に対して、現実的な下方修正を加えます。"
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            st.dataframe(
+                pd.DataFrame(raise_data), use_container_width=True, hide_index=True
+            )
+        with col2:
+            st.dataframe(
+                pd.DataFrame(risk_data), use_container_width=True, hide_index=True
+            )
+
+
+# ══════════════════════════════════════════════════════
+# 結果描画
+# ══════════════════════════════════════════════════════
 def render_analysis_results(
     sq,
     cc,
@@ -766,10 +876,8 @@ def render_analysis_results(
     skill_transfer,
     learning_cost,
 ):
-    """オリジナルのコンパクトなHTMLレイアウトを復活"""
     ages_to_65 = max(0, 65 - current_age)
 
-    # 値計算
     current_monthly = current_income / 14
     first_monthly = cc[0] / 14
     idx5 = min(5, len(sq) - 1)
@@ -1095,6 +1203,7 @@ def main() -> None:
                 unsafe_allow_html=True,
             )
 
+    # ガイド類の展開（3つ並べる）
     _render_skill_transfer_table(
         models,
         p["model_key"],
@@ -1104,6 +1213,8 @@ def main() -> None:
         p["current_income"],
         AGE_ALL_PATH,
     )
+    _render_macro_guide()
+    _render_risk_guide()
 
     st.markdown("### 📉 全モデル比較グラフ")
     fig3 = plot_all_models_plotly(

@@ -78,6 +78,21 @@ st.markdown(
     font-weight: 700;
     margin: 0.3rem 0 0;
 }
+
+/* 🌟 サイドバー先頭のボタンをスクロールに追従しないよう固定 */
+[data-testid="stSidebar"] > div:first-child > div:first-child > div:first-child > [data-testid="stButton"],
+[data-testid="stSidebarContent"] > [data-testid="stButton"]:first-child,
+[data-testid="stSidebar"] [data-testid="stButton"]:first-of-type {
+    position: -webkit-sticky;
+    position: sticky;
+    top: 0;
+    z-index: 9999;
+    background-color: var(--secondary-background-color);
+    padding-top: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 8px;
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -588,8 +603,41 @@ _OCC_TO_CATEGORY = {
 }
 
 
+import unicodedata as _ud
+
+
+def _normalize(s: str) -> str:
+    """全角→半角統一・スペース・記号除去して小文字化"""
+    s = _ud.normalize("NFKC", s)
+    return (
+        s.replace(" ", "")
+        .replace("\u3000", "")
+        .replace("\u30fb", "")
+        .replace("\uff65", "")
+        .replace("\uff0c", ",")
+        .replace("\u3001", ",")
+        .lower()
+    )
+
+
+_NORMALIZED_MASTER: dict = {
+    _normalize(occ): cat for cat, occs in OCCUPATION_CATEGORIES.items() for occ in occs
+}
+
+
 def get_category(occ: str) -> str:
-    return _OCC_TO_CATEGORY.get(occ, "その他")
+    if occ in _OCC_TO_CATEGORY:
+        return _OCC_TO_CATEGORY[occ]
+    return _NORMALIZED_MASTER.get(_normalize(occ), "その他")
+
+
+def _build_category_occ_map(occs: list) -> dict:
+    """CSV職種リストをカテゴリ別に振り分けた辞書を返す（表記揺れ吸収済み）"""
+    cat_map: dict = {cat: [] for cat in OCCUPATION_CATEGORIES}
+    for occ in occs:
+        cat = get_category(occ)
+        cat_map.setdefault(cat, []).append(occ)
+    return cat_map
 
 
 # ══════════════════════════════════════════════════════
@@ -599,6 +647,16 @@ def render_sidebar(
     occ_list: pd.DataFrame, models: Dict[str, Any], macro: Dict[str, Any]
 ) -> Tuple:
     occs = sorted(occ_list["occupation"].tolist())
+    # CSV職種をカテゴリ別に振り分け（表記揺れ吸収済み）
+    cat_occ_map = _build_category_occ_map(occs)
+
+    # 🌟 ボタンをフォームの外・サイドバー最上部に配置（スクロール非追従で固定）
+    submitted = st.sidebar.button(
+        "🚀 シミュレーション実行", type="primary", use_container_width=True
+    )
+
+    # 🌟 st.form を廃止し st.sidebar.* に統一
+    # → 大分類selectboxの変更がリアルタイムで職種リストに反映される
     st.sidebar.markdown("### 👤 プロフィール設定")
     current_age = st.sidebar.number_input("現在の年齢", 20, 65, 30, step=1)
     current_exp = st.sidebar.number_input("現在の勤続年数", 0, 40, 5, step=1)
@@ -639,22 +697,20 @@ def render_sidebar(
     all_cats = ["（すべて）"] + sorted(OCCUPATION_CATEGORIES.keys())
 
     cur_cat = st.sidebar.selectbox("現職の大分類", all_cats, index=0, key="cur_cat")
-    cur_occs = (
-        occs
-        if cur_cat == "（すべて）"
-        else sorted([o for o in occs if get_category(o) == cur_cat]) or occs
-    )
+    if cur_cat == "（すべて）":
+        cur_occs = occs
+    else:
+        cur_occs = sorted(cat_occ_map.get(cur_cat, [])) or occs
     default_current = cur_occs.index("販売店員") if "販売店員" in cur_occs else 0
     current_occ = st.sidebar.selectbox(
         "現職名", cur_occs, index=default_current, key="cur_occ"
     )
 
     tgt_cat = st.sidebar.selectbox("目標の大分類", all_cats, index=0, key="tgt_cat")
-    tgt_occs = (
-        occs
-        if tgt_cat == "（すべて）"
-        else sorted([o for o in occs if get_category(o) == tgt_cat]) or occs
-    )
+    if tgt_cat == "（すべて）":
+        tgt_occs = occs
+    else:
+        tgt_occs = sorted(cat_occ_map.get(tgt_cat, [])) or occs
     default_target = (
         tgt_occs.index("システムコンサルタント・設計者")
         if "システムコンサルタント・設計者" in tgt_occs
@@ -706,6 +762,7 @@ def render_sidebar(
         future_cpi,
         raise_suppression,
         career_risk,
+        submitted,
     )
 
 
@@ -993,9 +1050,10 @@ def main() -> None:
         future_cpi,
         raise_suppression,
         career_risk,
+        submitted,
     ) = render_sidebar(occ_list, models, macro)
 
-    if st.button("🚀 シミュレーション実行", type="primary"):
+    if submitted:
         st.session_state["sim_done"] = True
         st.session_state["sim_params"] = dict(
             current_occ=current_occ,
@@ -1014,10 +1072,211 @@ def main() -> None:
             future_cpi=future_cpi,
         )
 
-    if not st.session_state.get("sim_done"):
+    sim_done = st.session_state.get("sim_done", False)
+    # 初期画面（未実行）はガイドを展開、実行後は閉じた状態
+    guide_expanded = not sim_done
+
+    if not sim_done:
         st.info(
             "👈 サイドバーで条件を設定し、「シミュレーション実行」ボタンを押してください。"
         )
+        with st.expander(
+            "🤖 モデル精度情報（クリックで展開）", expanded=guide_expanded
+        ):
+            meta_path = os.path.join(MODEL_DIR, "model_meta.json")
+            if os.path.exists(meta_path):
+                with open(meta_path, encoding="utf-8") as f:
+                    meta_all = json.load(f)
+                n, ncols = len(meta_all), min(3, len(meta_all))
+                items, best = list(meta_all.items()), max(
+                    v["r2_train"] for v in meta_all.values()
+                )
+                for row_start in range(0, n, ncols):
+                    for col, (key, m) in zip(
+                        st.columns(len(items[row_start : row_start + ncols])),
+                        items[row_start : row_start + ncols],
+                    ):
+                        with col.container(border=True):
+                            st.markdown(f"**{m['label']}**")
+                            st.metric("R² Score", f"{m['r2_train']}")
+                            st.caption(
+                                f"CV={m['r2_cv_mean']}±{m['r2_cv_std']} / MAE={m['mae_train']}万円"
+                            )
+            st.markdown("---")
+            st.markdown("#### 📖 各モデルの特徴と使い分け")
+            MODEL_DESCRIPTIONS_INIT = [
+                (
+                    "🔵 Ridge Regression",
+                    "linear",
+                    "線形回帰にL2正則化を加えたシンプルモデル。職種・年齢・経験年数の主効果を線形に捉える。過学習しにくく安定した予測が特徴。標準的なキャリアパスの基準として使いやすい。",
+                ),
+                (
+                    "🔵 ElasticNet",
+                    "linear",
+                    "RidgeとLassoを融合した線形モデル。不要な特徴量の係数を自動でゼロに近づける（スパース性）。解釈性が高く、影響の強い特徴量を絞り込んで学習する。",
+                ),
+                (
+                    "🔵 Custom Ridge",
+                    "linear",
+                    "年齢²・年齢×経験年数の交互作用項など独自特徴量を追加した線形モデル。給与ピーク帯（35〜54歳）のフラグも組み込み、年収カーブの非線形な動きを線形モデルで近似する。",
+                ),
+                (
+                    "🟢 Random Forest",
+                    "tree",
+                    "複数の決定木を組み合わせたバギングモデル。職種ごとの細かい条件分岐を学習するが、外挿（訓練データ範囲外の予測）が苦手。CV精度は低めだが、特定職種の上振れ・下振れシナリオ確認に有効。",
+                ),
+                (
+                    "🟢 Gradient Boosting",
+                    "tree",
+                    "弱い決定木を順番に積み上げてエラーを修正する勾配ブースティング。sklearnの標準実装で追加インストール不要。XGBoostより低速だが安定性が高く、過学習に強い。",
+                ),
+                (
+                    "🟡 LightGBM",
+                    "boosting",
+                    "MicrosoftのLightGBMは葉ごとに成長する「Leaf-wise」戦略で高速。職種名をカテゴリ変数としてネイティブに処理でき、OHEが不要。大規模データでも実用的な速度で学習できる。",
+                ),
+                (
+                    "🟡 CatBoost",
+                    "boosting",
+                    "Yandexのカテゴリ特化ブースティング。Target Encodingを対称木とともに最適化する独自手法で職種名を扱う。ハイパーパラメータのデフォルト値が優秀でチューニング不要でも高精度。",
+                ),
+                (
+                    "🟡 XGBoost",
+                    "boosting",
+                    "勾配ブースティングの業界標準。L1/L2正則化・欠損値の自動処理・並列化など多くの最適化を備える。特徴量エンジニアリング（FE）を組み合わせることでさらに精度が向上。",
+                ),
+                (
+                    "🏆 Stacking Ensemble",
+                    "ensemble",
+                    "全ベースモデルのOOF（Out-of-Fold）予測をメタ特徴量としてRidgeで統合する2層アンサンブル。単一モデルでは捉えられない「モデル間の誤差の相補関係」を学習し、理論上最高精度を目指す。ただし訓練時間は最長。",
+                ),
+            ]
+            type_color = {
+                "linear": "#4F8EF7",
+                "tree": "#4CAF50",
+                "boosting": "#FF9800",
+                "ensemble": "#E040FB",
+            }
+            type_label = {
+                "linear": "線形系",
+                "tree": "ツリー系",
+                "boosting": "ブースティング系",
+                "ensemble": "アンサンブル",
+            }
+            for model_name, mtype, desc in MODEL_DESCRIPTIONS_INIT:
+                clr = type_color[mtype]
+                lbl = type_label[mtype]
+                st.markdown(
+                    f"<div style='border-left:3px solid {clr};padding:.4rem .8rem;margin:.35rem 0;'>"
+                    f"<span style='font-weight:700;color:{clr}'>{model_name}</span>"
+                    f"<span style='font-size:.7rem;background:{clr}22;color:{clr}; border-radius:4px;padding:1px 6px;margin-left:8px'>{lbl}</span>"
+                    f"<div style='font-size:.82rem;margin-top:.25rem;opacity:0.9;'>{desc}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+        gdp_data = [
+            {
+                "期待GDP成長率": "-2.0%",
+                "シナリオの意味": "深刻な不況。賃金水準全体が低下する悲観シナリオ。",
+            },
+            {
+                "期待GDP成長率": "0.0%",
+                "シナリオの意味": "ゼロ成長。経済が停滞し、昇給は年齢・経験カーブのみに依存。",
+            },
+            {
+                "期待GDP成長率": "1.0%",
+                "シナリオの意味": "緩やかな成長。過去10年間の日本経済の平均的な水準（標準）。",
+            },
+            {
+                "期待GDP成長率": "2.0%〜",
+                "シナリオの意味": "安定成長。インフレに連動した健全なベースアップが見込める楽観シナリオ。",
+            },
+        ]
+        cpi_data = [
+            {
+                "将来のCPI": "90",
+                "シナリオの意味": "デフレ進行。物価が下落し、名目賃金の上昇が強く抑えられる。",
+            },
+            {
+                "将来のCPI": "105",
+                "シナリオの意味": "現状維持。直近の緩やかなインフレ傾向の継続（標準）。",
+            },
+            {
+                "将来のCPI": "120",
+                "シナリオの意味": "マイルドインフレ。物価上昇に合わせて賃金への還元が進む。",
+            },
+            {
+                "将来のCPI": "140",
+                "シナリオの意味": "高インフレ。急激な物価高騰による名目賃金の上押し圧力。",
+            },
+        ]
+        with st.expander(
+            "🌍 マクロ経済シナリオガイド（GDP・CPI）", expanded=guide_expanded
+        ):
+            st.markdown("将来の日本全体の名目賃金上昇率に影響を与えます。")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.dataframe(
+                    pd.DataFrame(gdp_data), use_container_width=True, hide_index=True
+                )
+            with col2:
+                st.dataframe(
+                    pd.DataFrame(cpi_data), use_container_width=True, hide_index=True
+                )
+
+        raise_data = [
+            {
+                "転職後の昇給抑制": "0%",
+                "シナリオの意味": "抑制なし。AI予測通りの標準的な昇給を享受できる（理想的）。",
+            },
+            {
+                "転職後の昇給抑制": "10%",
+                "シナリオの意味": "軽微なビハインド。キャッチアップ期間として序盤の昇給がやや遅れる。",
+            },
+            {
+                "転職後の昇給抑制": "30%",
+                "シナリオの意味": "現実的な壁。未経験領域の評価構築に時間がかかり、昇給ペースが3割減速。",
+            },
+            {
+                "転職後の昇給抑制": "50%",
+                "シナリオの意味": "厳しい下積み。最初の数年間はベースアップがほぼ期待できない保守的シナリオ。",
+            },
+        ]
+        risk_data = [
+            {
+                "キャリアリスク係数": "0%",
+                "シナリオの意味": "リスクなし。生涯にわたり継続的に最新スキルをキャッチアップできる前提。",
+            },
+            {
+                "キャリアリスク係数": "10%",
+                "シナリオの意味": "標準的な陳腐化。中堅層以降で技術変化により若干の年収頭打ちが発生。",
+            },
+            {
+                "キャリアリスク係数": "20%",
+                "シナリオの意味": "シニア期の停滞。プレイングマネージャーとしての給与限界に直面する。",
+            },
+            {
+                "キャリアリスク係数": "30%",
+                "シナリオの意味": "スキルの陳腐化。技術パラダイムシフト等で10年後以降に市場価値が目減りする。",
+            },
+        ]
+        with st.expander(
+            "🛡️ リアリティ補正シナリオガイド（昇給抑制・キャリアリスク）",
+            expanded=guide_expanded,
+        ):
+            st.markdown(
+                "AIモデルが算出した「理想的な予測」に対して、現実的な下方修正を加えます。"
+            )
+            col1, col2 = st.columns(2)
+            with col1:
+                st.dataframe(
+                    pd.DataFrame(raise_data), use_container_width=True, hide_index=True
+                )
+            with col2:
+                st.dataframe(
+                    pd.DataFrame(risk_data), use_container_width=True, hide_index=True
+                )
         return
 
     p = st.session_state["sim_params"]
@@ -1108,7 +1367,37 @@ def main() -> None:
     )
     st.plotly_chart(fig_main, use_container_width=True, theme="streamlit")
 
-    with st.expander("🤖 モデル精度情報（クリックで展開）"):
+    st.markdown("### 📉 全モデル比較グラフ")
+    fig3 = plot_all_models_plotly(
+        sq_all,
+        cc_all,
+        p["current_age"],
+        [r[0] for r in roi_all],
+        [MODEL_LABELS_MAP[k] for k in MODEL_KEYS],
+    )
+    st.plotly_chart(fig3, use_container_width=True, theme="streamlit")
+
+    st.markdown("### 📊 年次詳細（選択モデル・5年刻み）")
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "年齢": f"{p['current_age'] + i}歳",
+                    "現状維持（万円）": f"{status_quo_incomes[i]:,.0f}",
+                    "転職後（万円）": f"{career_change_incomes[i]:,.0f}",
+                    "年間差（万円）": f"{career_change_incomes[i] - status_quo_incomes[i]:+,.0f}",
+                }
+                for i in range(0, 50, 5)
+            ]
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("---")
+
+    # ── ガイド類・モデル精度情報（年次詳細の下、実行後は閉じた状態）──
+    with st.expander("🤖 モデル精度情報（クリックで展開）", expanded=False):
         meta_path = os.path.join(MODEL_DIR, "model_meta.json")
         if os.path.exists(meta_path):
             with open(meta_path, encoding="utf-8") as f:
@@ -1203,7 +1492,7 @@ def main() -> None:
                 unsafe_allow_html=True,
             )
 
-    # ガイド類の展開（3つ並べる）
+    # ガイド類（expanded=True で常に展開）
     _render_skill_transfer_table(
         models,
         p["model_key"],
@@ -1215,33 +1504,6 @@ def main() -> None:
     )
     _render_macro_guide()
     _render_risk_guide()
-
-    st.markdown("### 📉 全モデル比較グラフ")
-    fig3 = plot_all_models_plotly(
-        sq_all,
-        cc_all,
-        p["current_age"],
-        [r[0] for r in roi_all],
-        [MODEL_LABELS_MAP[k] for k in MODEL_KEYS],
-    )
-    st.plotly_chart(fig3, use_container_width=True, theme="streamlit")
-
-    st.markdown("### 📊 年次詳細（選択モデル・5年刻み）")
-    st.dataframe(
-        pd.DataFrame(
-            [
-                {
-                    "年齢": f"{p['current_age'] + i}歳",
-                    "現状維持（万円）": f"{status_quo_incomes[i]:,.0f}",
-                    "転職後（万円）": f"{career_change_incomes[i]:,.0f}",
-                    "年間差（万円）": f"{career_change_incomes[i] - status_quo_incomes[i]:+,.0f}",
-                }
-                for i in range(0, 50, 5)
-            ]
-        ),
-        use_container_width=True,
-        hide_index=True,
-    )
 
     st.markdown("---")
     rs = p.get("raise_suppression", 0.0)

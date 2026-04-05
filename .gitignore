@@ -14,3 +14,7 @@ models/*.pkl
 .venv/
 venv/
 .env
+
+# Doceker関連
+docker-compose.yml
+Dockerfile

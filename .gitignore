@@ -49,6 +49,9 @@ Thumbs.db
 *.swp
 *.swo
 
+# Claude Code ローカル設定（共有不要）
+.claude/settings.local.json
+
 # Docker
 docker-compose.yml
 Dockerfile

@@ -1,20 +1,54 @@
-# Pythonのキャッシュ
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
-# 大容量のデータファイル（Git管理から外す）
+# 仮想環境
+.venv/
+venv/
+env/
+
+# 環境変数・機密情報
+.env
+.env.*
+!.env.example
+*.pem
+credentials.json
+CLAUDE.local.md
+
+# データファイル（大容量・再生成可能）
 data/raw/
 data/processed/
 data/master/
 
-# 学習済みモデル（バイナリファイルは重いため）
+# 学習済みモデル
 models/*.pkl
 
-# 環境設定
-.venv/
-venv/
-.env
+# ML フレームワークのキャッシュ
+catboost_info/
 
-# Doceker関連
+# ビルド成果物
+dist/
+build/
+coverage/
+
+# ログ
+*.log
+logs/
+
+# OS・エディタ
+.DS_Store
+._*
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
 docker-compose.yml
 Dockerfile

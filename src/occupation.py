@@ -173,15 +173,17 @@ OCCUPATION_CATEGORIES: dict[str, list[str]] = {
     ],
 }
 
+OTHER_CATEGORY = "その他"
+
 _OCC_TO_CATEGORY: dict[str, str] = {
     occ: cat for cat, occs in OCCUPATION_CATEGORIES.items() for occ in occs
 }
 
 
-def _normalize(s: str) -> str:
-    s = _ud.normalize("NFKC", s)
+def _normalize(text: str) -> str:
+    normalized = _ud.normalize("NFKC", text)
     return (
-        s.replace(" ", "")
+        normalized.replace(" ", "")
         .replace("　", "")
         .replace("・", "")
         .replace("･", "")
@@ -196,14 +198,14 @@ _NORMALIZED_MASTER: dict[str, str] = {
 }
 
 
-def get_category(occ: str) -> str:
+def getCategory(occ: str) -> str:
     if occ in _OCC_TO_CATEGORY:
         return _OCC_TO_CATEGORY[occ]
-    return _NORMALIZED_MASTER.get(_normalize(occ), "その他")
+    return _NORMALIZED_MASTER.get(_normalize(occ), OTHER_CATEGORY)
 
 
-def build_category_occ_map(occs: list[str]) -> dict[str, list[str]]:
-    cat_map: dict[str, list[str]] = {cat: [] for cat in OCCUPATION_CATEGORIES}
+def buildCategoryOccMap(occs: list[str]) -> dict[str, list[str]]:
+    catMap: dict[str, list[str]] = {cat: [] for cat in OCCUPATION_CATEGORIES}
     for occ in occs:
-        cat_map.setdefault(get_category(occ), []).append(occ)
-    return cat_map
+        catMap.setdefault(getCategory(occ), []).append(occ)
+    return catMap

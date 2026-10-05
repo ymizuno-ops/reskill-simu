@@ -1,11 +1,12 @@
 """
 model_wrappers.py
 =================
-sklearn 互換の Wrapper class と、StackingEnsemble が使う add_features。
+sklearn 互換の Wrapper class と、StackingEnsemble が使う addFeatures。
 pickle で保存できるよう、すべてモジュールレベルで定義する（step3_train.py から分離）。
 """
 
 from __future__ import annotations
+import copy
 import os
 import pandas as pd
 import numpy as np
@@ -14,20 +15,33 @@ from sklearn.preprocessing   import LabelEncoder
 from sklearn.model_selection import KFold
 from sklearn.base            import BaseEstimator, RegressorMixin
 
+from log_config import getLogger
+from model_types import ModelDict, Regressor, Target
+
+logger = getLogger(__name__)
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 CATBOOST_TRAIN_DIR = os.path.join(_HERE, "..", "tmp", "catboost_info")
+RANDOM_STATE = 42
+
+# 特徴量エンジニアリングの係数
+AGE_SQ_SCALE      = 1000   # age² を他の特徴量と同程度の桁にそろえる
+AGE_X_EXP_SCALE   = 100
+PRIME_AGE_FROM    = 35     # 給与ピーク帯
+PRIME_AGE_TO      = 54
+UNKNOWN_CATEGORY_INDEX = 0  # LightGBM: 未知の職種は先頭クラスとして扱う
 
 
 # ──────────────────────────────────────────────────────
 # 共通前処理
 # ──────────────────────────────────────────────────────
-def add_features(X: pd.DataFrame) -> pd.DataFrame:
-    Xc = X.copy()
-    Xc["age_sq"]         = Xc["age"] ** 2 / 1000
-    Xc["age_x_exp"]      = Xc["age"] * Xc["experience_years"] / 100
-    Xc["exp_ratio"]      = Xc["experience_years"] / Xc["age"].clip(lower=1)
-    Xc["prime_age_flag"] = ((Xc["age"] >= 35) & (Xc["age"] <= 54)).astype(float)
-    return Xc
+def addFeatures(X: pd.DataFrame) -> pd.DataFrame:
+    xc = X.copy()
+    xc["age_sq"]         = xc["age"] ** 2 / AGE_SQ_SCALE
+    xc["age_x_exp"]      = xc["age"] * xc["experience_years"] / AGE_X_EXP_SCALE
+    xc["exp_ratio"]      = xc["experience_years"] / xc["age"].clip(lower=1)
+    xc["prime_age_flag"] = ((xc["age"] >= PRIME_AGE_FROM) & (xc["age"] <= PRIME_AGE_TO)).astype(float)
+    return xc
 
 
 # ══════════════════════════════════════════════════════
@@ -40,9 +54,9 @@ class LGBMWrapper(BaseEstimator, RegressorMixin):
     occupation を LabelEncoding してカテゴリ特徴として渡す。
     """
     def __init__(self,
-                 n_estimators=500, learning_rate=0.05, num_leaves=63,
-                 min_child_samples=10, subsample=0.8, colsample_bytree=0.8,
-                 reg_alpha=0.1, reg_lambda=1.0, random_state=42):
+                 n_estimators: int = 500, learning_rate: float = 0.05, num_leaves: int = 63,
+                 min_child_samples: int = 10, subsample: float = 0.8, colsample_bytree: float = 0.8,
+                 reg_alpha: float = 0.1, reg_lambda: float = 1.0, random_state: int = RANDOM_STATE) -> None:
         self.n_estimators    = n_estimators
         self.learning_rate   = learning_rate
         self.num_leaves      = num_leaves
@@ -53,11 +67,11 @@ class LGBMWrapper(BaseEstimator, RegressorMixin):
         self.reg_lambda      = reg_lambda
         self.random_state    = random_state
 
-    def fit(self, X, y):
+    def fit(self, X: pd.DataFrame, y: Target) -> "LGBMWrapper":
         import lightgbm as lgb
         self.le_ = LabelEncoder()
-        Xc = X.copy()
-        Xc["occupation"] = self.le_.fit_transform(Xc["occupation"].astype(str))
+        xc = X.copy()
+        xc["occupation"] = self.le_.fit_transform(xc["occupation"].astype(str))
         self.model_ = lgb.LGBMRegressor(
             n_estimators=self.n_estimators,
             learning_rate=self.learning_rate,
@@ -71,17 +85,16 @@ class LGBMWrapper(BaseEstimator, RegressorMixin):
             n_jobs=-1,
             verbose=-1,
         )
-        self.model_.fit(Xc, y, categorical_feature=[0])
+        self.model_.fit(xc, y, categorical_feature=[0])
         return self
 
-    def predict(self, X):
-        Xc = X.copy()
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        xc = X.copy()
         known = set(self.le_.classes_)
-        Xc["occupation"] = Xc["occupation"].apply(
-            lambda v: v if v in known else self.le_.classes_[0]
-        )
-        Xc["occupation"] = self.le_.transform(Xc["occupation"].astype(str))
-        return self.model_.predict(Xc)
+        fallback = self.le_.classes_[UNKNOWN_CATEGORY_INDEX]
+        xc["occupation"] = xc["occupation"].apply(lambda v: v if v in known else fallback)
+        xc["occupation"] = self.le_.transform(xc["occupation"].astype(str))
+        return self.model_.predict(xc)
 
 
 class CatBoostWrapper(BaseEstimator, RegressorMixin):
@@ -90,8 +103,9 @@ class CatBoostWrapper(BaseEstimator, RegressorMixin):
     occupation を文字列のまま cat_features に指定できる。
     """
     def __init__(self,
-                 iterations=500, learning_rate=0.05, depth=8,
-                 l2_leaf_reg=3.0, min_data_in_leaf=10, random_state=42):
+                 iterations: int = 500, learning_rate: float = 0.05, depth: int = 8,
+                 l2_leaf_reg: float = 3.0, min_data_in_leaf: int = 10,
+                 random_state: int = RANDOM_STATE) -> None:
         self.iterations       = iterations
         self.learning_rate    = learning_rate
         self.depth            = depth
@@ -99,7 +113,7 @@ class CatBoostWrapper(BaseEstimator, RegressorMixin):
         self.min_data_in_leaf = min_data_in_leaf
         self.random_state     = random_state
 
-    def fit(self, X, y):
+    def fit(self, X: pd.DataFrame, y: Target) -> "CatBoostWrapper":
         from catboost import CatBoostRegressor
         os.makedirs(CATBOOST_TRAIN_DIR, exist_ok=True)  # tmp/ が無いと CatBoost が作れず失敗する
         self.model_ = CatBoostRegressor(
@@ -116,7 +130,7 @@ class CatBoostWrapper(BaseEstimator, RegressorMixin):
         self.model_.fit(X, y, cat_features=["occupation"])
         return self
 
-    def predict(self, X):
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
         return self.model_.predict(X)
 
 
@@ -135,12 +149,12 @@ class StackingEnsemble(BaseEstimator, RegressorMixin):
         - Ridge を使う理由: シンプルで過学習しにくく、
           各モデルへの重みを線形結合で学習できる
 
-    FE_KEYS に含まれるモデルは predict 前に add_features を適用する。
+    FE_KEYS に含まれるモデルは predict 前に addFeatures を適用する。
     """
 
     FE_KEYS = frozenset({"custom", "xgboost", "elasticnet", "gradient_boosting"})
 
-    def __init__(self, base_models: dict, n_splits: int = 5, meta_alpha: float = 1.0):
+    def __init__(self, base_models: ModelDict, n_splits: int = 5, meta_alpha: float = 1.0) -> None:
         """
         Parameters
         ----------
@@ -155,77 +169,68 @@ class StackingEnsemble(BaseEstimator, RegressorMixin):
         self.meta_alpha  = meta_alpha
 
     # ── 内部メソッド ──────────────────────────────
-    def _prepare_X(self, X: pd.DataFrame, key: str) -> pd.DataFrame:
+    def _prepareX(self, X: pd.DataFrame, key: str) -> pd.DataFrame:
         """モデルキーに応じて特徴量エンジニアリングを適用"""
-        return add_features(X) if key in self.FE_KEYS else X.copy()
+        return addFeatures(X) if key in self.FE_KEYS else X.copy()
 
-    def _make_oof_matrix(self, X: pd.DataFrame, y: np.ndarray) -> np.ndarray:
+    def _fitClone(self, key: str, X: pd.DataFrame, y: np.ndarray) -> Regressor:
+        """ベースモデルをディープコピーして訓練する（元のモデルは変えない）"""
+        cloned = copy.deepcopy(self.base_models[key]["pipeline"])
+        cloned.fit(self._prepareX(X, key), y)
+        return cloned
+
+    def _makeOofMatrix(self, X: pd.DataFrame, y: np.ndarray) -> np.ndarray:
         """
         全ベースモデルのOOF予測行列を作成する。
         shape: (n_samples, n_base_models)
         """
-        n         = len(y)
-        model_keys = list(self.base_models.keys())
-        oof_matrix = np.zeros((n, len(model_keys)))
-        kf         = KFold(n_splits=self.n_splits, shuffle=True, random_state=42)
+        modelKeys = list(self.base_models.keys())
+        oofMatrix = np.zeros((len(y), len(modelKeys)))
+        kf        = KFold(n_splits=self.n_splits, shuffle=True, random_state=RANDOM_STATE)
 
-        for fold_idx, (tr_idx, val_idx) in enumerate(kf.split(X), 1):
-            X_tr  = X.iloc[tr_idx].reset_index(drop=True)
-            X_val = X.iloc[val_idx].reset_index(drop=True)
-            y_tr  = y[tr_idx]
+        for trainIdx, valIdx in kf.split(X):
+            xTrain = X.iloc[trainIdx].reset_index(drop=True)
+            xVal   = X.iloc[valIdx].reset_index(drop=True)
 
-            for col_idx, key in enumerate(model_keys):
-                import copy
+            for colIdx, key in enumerate(modelKeys):
                 # モデルのディープコピーを fold ごとに再訓練
-                model_entry = self.base_models[key]
-                cloned = copy.deepcopy(model_entry["pipeline"])
-                cloned.fit(self._prepare_X(X_tr, key), y_tr)
-                oof_matrix[val_idx, col_idx] = cloned.predict(
-                    self._prepare_X(X_val, key)
-                )
+                cloned = self._fitClone(key, xTrain, y[trainIdx])
+                oofMatrix[valIdx, colIdx] = cloned.predict(self._prepareX(xVal, key))
 
-        return oof_matrix
+        return oofMatrix
 
-    def _make_meta_X(self, oof_or_pred: np.ndarray,
-                     X: pd.DataFrame) -> np.ndarray:
+    def _makeMetaX(self, oofOrPred: np.ndarray, X: pd.DataFrame) -> np.ndarray:
         """
         メタ特徴量 = ベースモデル予測値 + age + experience_years
         age/experience_years を追加することで「年齢帯の系統誤差」を補正できる
         """
         structural = X[["age", "experience_years"]].values
-        return np.hstack([oof_or_pred, structural])
+        return np.hstack([oofOrPred, structural])
 
     # ── 公開メソッド ──────────────────────────────
-    def fit(self, X: pd.DataFrame, y):
-        y = np.asarray(y)
-        model_keys = list(self.base_models.keys())
+    def fit(self, X: pd.DataFrame, y: Target) -> "StackingEnsemble":
+        yArr = np.asarray(y)
+        modelKeys = list(self.base_models.keys())
 
         # Layer1: OOF予測行列を作成
-        print(f"    [Stacking] OOF予測中 ({len(model_keys)}モデル × {self.n_splits}fold)...",
-              end="", flush=True)
-        oof_matrix = self._make_oof_matrix(X, y)
-        print(" 完了")
+        logger.info("    [Stacking] OOF予測中 (%dモデル × %dfold)...", len(modelKeys), self.n_splits)
+        oofMatrix = self._makeOofMatrix(X, yArr)
+        logger.info("    [Stacking] OOF予測 完了")
 
         # Layer1: 全データでベースモデルを再訓練（最終予測用）
-        self.fitted_bases_ = {}
-        for key in model_keys:
-            import copy
-            cloned = copy.deepcopy(self.base_models[key]["pipeline"])
-            cloned.fit(self._prepare_X(X, key), y)
-            self.fitted_bases_[key] = cloned
+        # 属性名は sklearn の規約（末尾 _）と models.pkl の互換のため変えない
+        self.fitted_bases_ = {key: self._fitClone(key, X, yArr) for key in modelKeys}
 
         # Layer2: メタモデルを訓練
-        meta_X = self._make_meta_X(oof_matrix, X)
         self.meta_model_ = Ridge(alpha=self.meta_alpha)
-        self.meta_model_.fit(meta_X, y)
-        self.model_keys_ = model_keys
+        self.meta_model_.fit(self._makeMetaX(oofMatrix, X), yArr)
+        self.model_keys_ = modelKeys
         return self
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         # 各ベースモデルの予測を並べる
-        base_preds = np.column_stack([
-            self.fitted_bases_[key].predict(self._prepare_X(X, key))
+        basePreds = np.column_stack([
+            self.fitted_bases_[key].predict(self._prepareX(X, key))
             for key in self.model_keys_
         ])
-        meta_X = self._make_meta_X(base_preds, X)
-        return self.meta_model_.predict(meta_X)
+        return self.meta_model_.predict(self._makeMetaX(basePreds, X))

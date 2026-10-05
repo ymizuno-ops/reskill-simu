@@ -15,3 +15,12 @@
 - main.py の `_HERE` を `_ROOT` に改名、`except ImportError: pass` を削除して model_wrappers から直接 import
 - CatBoostWrapper.fit で tmp/catboost_info を自動作成するよう修正（tmp/ が無いと学習が失敗する不具合）
 - README.md・docs/design.md の構成図を更新し、README の「今後の課題」から step3 分割を削除
+
+## 2026-10-06 05:04 (refactor/coding-standards)
+- src/ 以下の全コードにコーディング規約を適用（関数・変数を lowerCamelCase、真偽値に is 接頭辞、print を logging に置換、型ヒント追加・Any 排除、マジックナンバーの定数化）
+- 共通設定 src/log_config.py と型定義 src/model_types.py を追加
+- step3_train.py から各モデルの訓練処理を src/step3_models.py に分割
+- simulation.py の重複していた特徴量追加処理を model_wrappers.addFeatures に統一
+- 例外の握りつぶしをなくし、警告ログを出すように変更
+- サイドバーの年齢の上限を 64 歳（RETIREMENT_AGE - 1）にし、65 歳で IndexError になる不具合を修正
+- README・docs/design.md の関数名・ファイル構成を更新、.ai/ERRORS.md に設計漏れを記録

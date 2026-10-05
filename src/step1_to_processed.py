@@ -19,325 +19,313 @@ data/processed/ に整形済み CSV として出力する。
 
 from __future__ import annotations
 import os, re, warnings
+from collections.abc import Callable
 import pandas as pd
 import numpy as np
 
+from log_config import getLogger
 from step1_common import (
-    OUT_DIR, list_xlsx, safe_num, extract_year, clean_name, find_data_start,
+    listXlsx, safeNum, extractYear, cleanName, findDataStart, toManYen,
+    addAnnualIncome, saveCsv, MIN_VALID_WAGE, MIN_NAME_LENGTH, NEW_FORMAT_FROM_YEAR,
+    UNDER19_AGE_MID, UNDER19_AGE_LABEL, DEEP_INDENT,
 )
-from step1_macro import process_monthly_labor, process_gdp, process_cpi
+from step1_macro import processMonthlyLabor, processGdp, processCpi
 
 warnings.filterwarnings("ignore")
+logger = getLogger(__name__)
+
+# 職種別給与（旧新共通）の列位置
+OCC_NAME_COL  = 1
+OCC_WAGE_COL  = 7   # きまって支給する現金給与額（千円）
+OCC_BONUS_COL = 9   # 年間賞与その他特別給与額（千円）
+
+# 年齢階級別給与の列位置
+AGE_NEW_NAME_COL, AGE_NEW_WAGE_COL, AGE_NEW_BONUS_COL = 1, 7, 9
+AGE_OLD_NAME_COL, AGE_OLD_WAGE_COL, AGE_OLD_BONUS_COL = 0, 5, 7
+
+# 経験年数階級別給与
+EXP_HEADER_ROWS       = 10   # 列マップを探すヘッダーの行数
+EXP_BONUS_MONTHS      = 1.5  # 賞与が欠損のとき月収の何か月分とみなすか
+EXP_TOTAL_KEY         = "total"
+EXP_NEW_NAME_COL, EXP_NEW_TOTAL_COL = 1, 3
+EXP_OLD_NAME_COL, EXP_OLD_TOTAL_COL = 0, 1
+
+SECTION_RULE_WIDTH = 60
+
+
+def _readFiles(key: str, parse: Callable[[pd.DataFrame, int], list[dict]]) -> list[dict]:
+    """key のファイルを順に読み、parse(df, year) の結果をまとめる。読めないファイルは警告して飛ばす"""
+    files = listXlsx(key)
+    logger.info("  対象: %d ファイル", len(files))
+    records: list[dict] = []
+    for path in files:
+        year = extractYear(os.path.basename(path))
+        try:
+            records.extend(parse(pd.read_excel(path, header=None, dtype=str), year))
+        except Exception as e:
+            logger.warning("  ⚠ %s: %s", os.path.basename(path), e)
+    return records
+
+
+def _isAgeRowName(name: str) -> bool:
+    return bool(re.search(r"\d+\s*[～~]\s*\d+", name)) or "１９歳" in name or "19歳" in name
+
+
+def _findOldDataStart(df: pd.DataFrame, shouldExcludeTilde: bool) -> int | None:
+    """旧形式: 職種名らしい最初の行（見出し・番号・年齢行を除く）を探す"""
+    for i, row in df.iterrows():
+        v = str(row.iloc[0]).replace("　", "").strip()
+        if (len(v) > MIN_NAME_LENGTH and "区" not in v and "nan" not in v
+                and not v.startswith("第") and not re.match(r"^\d", v)
+                and "歳" not in v
+                and not (shouldExcludeTilde and ("〜" in v or "～" in v))):
+            return i
+    return None
 
 
 # ══════════════════════════════════════════════════════
 # 1. 職種別給与（産業計）
 # ══════════════════════════════════════════════════════
-# 列レイアウト（旧新共通）:
-#   col1 = 職種名
-#   col7 = きまって支給する現金給与額（千円）
-#   col9 = 年間賞与その他特別給与額（千円）
-def process_occupation_wage() -> pd.DataFrame:
-    print("[職種別給与]")
-    files = list_xlsx("occ")
-    print(f"  対象: {len(files)} ファイル")
-    records = []
+def _parseOccupation(df: pd.DataFrame, year: int) -> list[dict]:
+    records: list[dict] = []
+    dataStart = findDataStart(df)
+    if dataStart is None:
+        return records
 
-    for path in files:
-        year = extract_year(os.path.basename(path))
-        try:
-            df = pd.read_excel(path, header=None, dtype=str)
-            data_start = find_data_start(df)
-            if data_start is None:
-                continue
+    for i in range(dataStart, len(df)):
+        row  = df.iloc[i]
+        name = cleanName(str(row.iloc[OCC_NAME_COL]))
+        if not name or name == "nan" or len(name) < MIN_NAME_LENGTH or _isAgeRowName(name):
+            continue
 
-            for i in range(data_start, len(df)):
-                row  = df.iloc[i]
-                raw  = str(row.iloc[1])
-                name = clean_name(raw)
+        wage = safeNum(row.iloc[OCC_WAGE_COL])
+        if np.isnan(wage) or wage <= MIN_VALID_WAGE:
+            continue
+        records.append({
+            "year": year, "occupation": name,
+            "monthly_wage": toManYen(wage),
+            "annual_bonus": toManYen(safeNum(row.iloc[OCC_BONUS_COL])),
+        })
+    return records
 
-                if (not name or name == "nan" or len(name) < 2
-                        or re.search(r"\d+\s*[～~]\s*\d+", name)
-                        or "１９歳" in name or "19歳" in name):
-                    continue
 
-                wage  = safe_num(row.iloc[7])
-                bonus = safe_num(row.iloc[9])
-                if np.isnan(wage) or wage <= 10:
-                    continue
-
-                records.append({
-                    "year": year, "occupation": name,
-                    "monthly_wage": wage / 10,
-                    "annual_bonus": bonus / 10 if not np.isnan(bonus) else np.nan,
-                })
-        except Exception as e:
-            print(f"  ⚠ {os.path.basename(path)}: {e}")
-
-    df_out = pd.DataFrame(records)
-    df_out["annual_income"] = (
-        df_out["monthly_wage"] * 12
-        + df_out["annual_bonus"].fillna(df_out["monthly_wage"] * 2)
-    )
-    df_out.to_csv(os.path.join(OUT_DIR, "occupation_wage_all.csv"), index=False, encoding="utf-8-sig")
-    print(f"  ✅ occupation_wage_all.csv: {len(df_out):,} レコード "
-          f"({df_out['year'].min()}〜{df_out['year'].max()}年, {df_out['occupation'].nunique()} 職種)")
-    return df_out
+def processOccupationWage() -> pd.DataFrame:
+    logger.info("[職種別給与]")
+    dfOut = addAnnualIncome(pd.DataFrame(_readFiles("occ", _parseOccupation)))
+    saveCsv(dfOut, "occupation_wage_all.csv")
+    logger.info("  ✅ occupation_wage_all.csv: %s レコード (%s〜%s年, %d 職種)",
+                f"{len(dfOut):,}", dfOut["year"].min(), dfOut["year"].max(), dfOut["occupation"].nunique())
+    return dfOut
 
 
 # ══════════════════════════════════════════════════════
 # 2. 年齢階級別給与
 # ══════════════════════════════════════════════════════
-def _parse_age_new(df: pd.DataFrame, year: int) -> list:
+def _ageRecord(year: int, occ: str, ageMatch: re.Match | None,
+               wage: float, bonus: float) -> dict:
+    """年齢行の値から 1 レコードを作る。ageMatch が None なら 19 歳以下の行"""
+    if ageMatch is None:
+        ageMid, ageLabel = UNDER19_AGE_MID, UNDER19_AGE_LABEL
+    else:
+        ageFrom, ageTo = int(ageMatch.group(1)), int(ageMatch.group(2))
+        ageMid, ageLabel = (ageFrom + ageTo) / 2, f"{ageFrom}〜{ageTo}歳"
+    return {
+        "year": year, "occupation": occ,
+        "age_label": ageLabel, "age_mid": ageMid,
+        "monthly_wage": toManYen(wage),
+        "annual_bonus": toManYen(bonus),
+    }
+
+
+def _parseAgeNew(df: pd.DataFrame, year: int) -> list[dict]:
     """2020〜: col1=職種名/年齢, col7=給与, col9=賞与"""
-    records, current_occ = [], None
-    data_start = find_data_start(df)
-    if data_start is None:
+    records: list[dict] = []
+    currentOcc: str | None = None
+    dataStart = findDataStart(df)
+    if dataStart is None:
         return records
 
-    for i in range(data_start, len(df)):
+    for i in range(dataStart, len(df)):
         row  = df.iloc[i]
-        raw  = str(row.iloc[1]).replace("\n", "")
-        name = raw.replace("\u3000", "").strip()
+        raw  = str(row.iloc[AGE_NEW_NAME_COL]).replace("\n", "")
+        name = raw.replace("　", "").strip()
 
-        age_m  = re.search(r"(\d+)\s*[～~]\s*(\d+)", name)
-        is_u19 = "１９歳" in name or "19歳" in name
+        ageMatch = re.search(r"(\d+)\s*[～~]\s*(\d+)", name)
+        isUnder19 = "１９歳" in name or "19歳" in name
 
-        if age_m or is_u19:
-            if current_occ is None:
+        if ageMatch or isUnder19:
+            if currentOcc is None:
                 continue
-            wage  = safe_num(row.iloc[7])
-            bonus = safe_num(row.iloc[9])
+            wage = safeNum(row.iloc[AGE_NEW_WAGE_COL])
             if np.isnan(wage) or wage <= 0:
                 continue
-            if is_u19:
-                age_mid, age_label = 18.0, "〜19歳"
-            else:
-                a1, a2 = int(age_m.group(1)), int(age_m.group(2))
-                age_mid, age_label = (a1 + a2) / 2, f"{a1}〜{a2}歳"
-            records.append({
-                "year": year, "occupation": current_occ,
-                "age_label": age_label, "age_mid": age_mid,
-                "monthly_wage": wage / 10,
-                "annual_bonus": bonus / 10 if not np.isnan(bonus) else np.nan,
-            })
-        elif name and name != "nan" and len(name) > 1:
-            if not raw.startswith("\u3000\u3000\u3000"):
-                current_occ = clean_name(name)
+            records.append(_ageRecord(year, currentOcc, None if isUnder19 else ageMatch,
+                                      wage, safeNum(row.iloc[AGE_NEW_BONUS_COL])))
+        elif name and name != "nan" and len(name) > 1 and not raw.startswith(DEEP_INDENT):
+            currentOcc = cleanName(name)
     return records
 
 
-def _parse_age_old(df: pd.DataFrame, year: int) -> list:
+def _parseAgeOld(df: pd.DataFrame, year: int) -> list[dict]:
     """
     〜2019: col0=職種名(男)/年齢階級, col5=給与, col7=賞与
     ※ 旧形式は産業計ではなく性別ファイルのため、男女計のデータはない。
       「職種名(男)」行の総計値（年齢小計）を使用する。
     """
-    records, current_occ = [], None
-    data_start = None
-    for i, row in df.iterrows():
-        v = str(row.iloc[0]).replace("\u3000", "").strip()
-        if (len(v) > 2 and "区" not in v and "nan" not in v
-                and not v.startswith("第") and not re.match(r"^\d", v)
-                and "歳" not in v and "〜" not in v and "～" not in v):
-            data_start = i
-            break
-    if data_start is None:
+    records: list[dict] = []
+    currentOcc: str | None = None
+    dataStart = _findOldDataStart(df, shouldExcludeTilde=True)
+    if dataStart is None:
         return records
 
-    for i in range(data_start, len(df)):
+    for i in range(dataStart, len(df)):
         row  = df.iloc[i]
-        raw0 = str(row.iloc[0]).replace("\u3000", "").strip()
+        raw0 = str(row.iloc[AGE_OLD_NAME_COL]).replace("　", "").strip()
 
-        age_m  = re.search(r"(\d+)\s*[～~\s]+\s*(\d+)", raw0)
-        is_u19 = "17歳" in raw0 or "19歳" in raw0 or "18　～　19" in raw0
+        ageMatch = re.search(r"(\d+)\s*[～~\s]+\s*(\d+)", raw0)
+        isUnder19 = "17歳" in raw0 or "19歳" in raw0 or "18　～　19" in raw0
 
-        if age_m or is_u19:
-            if current_occ is None:
+        if ageMatch or isUnder19:
+            if currentOcc is None:
                 continue
-            wage  = safe_num(row.iloc[5])
-            bonus = safe_num(row.iloc[7])
+            wage = safeNum(row.iloc[AGE_OLD_WAGE_COL])
             if np.isnan(wage) or wage <= 0:
                 continue
-            if is_u19:
-                age_mid, age_label = 18.0, "〜19歳"
-            else:
-                a1, a2 = int(age_m.group(1)), int(age_m.group(2))
-                age_mid, age_label = (a1 + a2) / 2, f"{a1}〜{a2}歳"
-            records.append({
-                "year": year, "occupation": current_occ,
-                "age_label": age_label, "age_mid": age_mid,
-                "monthly_wage": wage / 10,
-                "annual_bonus": bonus / 10 if not np.isnan(bonus) else np.nan,
-            })
-        elif raw0 and raw0 != "nan" and len(raw0) > 2:
+            records.append(_ageRecord(year, currentOcc, None if isUnder19 else ageMatch,
+                                      wage, safeNum(row.iloc[AGE_OLD_BONUS_COL])))
+        elif raw0 and raw0 != "nan" and len(raw0) > MIN_NAME_LENGTH:
             occ = re.sub(r"\s*\(.*?\)\s*$", "", raw0).strip()
             if occ and not re.match(r"^\d", occ):
-                current_occ = occ
+                currentOcc = occ
     return records
 
 
-def process_age_wage() -> pd.DataFrame:
-    print("[年齢階級別給与]")
-    files = list_xlsx("age")
-    print(f"  対象: {len(files)} ファイル")
-    records = []
+def _parseAge(df: pd.DataFrame, year: int) -> list[dict]:
+    return _parseAgeNew(df, year) if year >= NEW_FORMAT_FROM_YEAR else _parseAgeOld(df, year)
 
-    for path in files:
-        year = extract_year(os.path.basename(path))
-        try:
-            df = pd.read_excel(path, header=None, dtype=str)
-            records.extend(_parse_age_new(df, year) if year >= 2020 else _parse_age_old(df, year))
-        except Exception as e:
-            print(f"  ⚠ {os.path.basename(path)}: {e}")
 
-    df_out = pd.DataFrame(records)
-    df_out["annual_income"] = (
-        df_out["monthly_wage"] * 12
-        + df_out["annual_bonus"].fillna(df_out["monthly_wage"] * 2)
-    )
-    df_out.to_csv(os.path.join(OUT_DIR, "age_wage_all.csv"), index=False, encoding="utf-8-sig")
-    print(f"  ✅ age_wage_all.csv: {len(df_out):,} レコード "
-          f"({df_out['year'].min()}〜{df_out['year'].max()}年)")
-    return df_out
+def processAgeWage() -> pd.DataFrame:
+    logger.info("[年齢階級別給与]")
+    dfOut = addAnnualIncome(pd.DataFrame(_readFiles("age", _parseAge)))
+    saveCsv(dfOut, "age_wage_all.csv")
+    logger.info("  ✅ age_wage_all.csv: %s レコード (%s〜%s年)",
+                f"{len(dfOut):,}", dfOut["year"].min(), dfOut["year"].max())
+    return dfOut
 
 
 # ══════════════════════════════════════════════════════
 # 3. 経験年数階級別給与
 # ══════════════════════════════════════════════════════
-def _get_exp_col_map(df: pd.DataFrame) -> dict:
+_EXP_PATTERNS: list[tuple[str | float, list[str]]] = [
+    (EXP_TOTAL_KEY, ["経験年数計"]),
+    (0.0,  ["０年", "0年"]),
+    (2.5,  ["１～４年", "1～4年", "1 ～ 4 年"]),
+    (7.0,  ["５～９年", "5～9年", "5 ～ 9 年"]),
+    (12.0, ["１０～１４年", "10～14年"]),
+    (17.0, ["１５～１９年", "15～19年", "１５年以上", "15年以上"]),
+    (22.0, ["２０年以上", "20年以上"]),
+]
+
+
+def _getExpColMap(df: pd.DataFrame) -> dict[str | float, int]:
     """
     ヘッダー行を走査して 経験年数バンド→列インデックス のマップを返す。
     新形式(2020〜): 0年/1〜4年/5〜9年/10〜14年/15年以上  (5バンド)
     旧形式(〜2019): 0年/1〜4年/5〜9年/10〜14年/15〜19年/20年以上 (6バンド)
     """
-    patterns = [
-        ("total", ["経験年数計"]),
-        (0.0,  ["０年", "0年"]),
-        (2.5,  ["１～４年", "1～4年", "1 ～ 4 年"]),
-        (7.0,  ["５～９年", "5～9年", "5 ～ 9 年"]),
-        (12.0, ["１０～１４年", "10～14年"]),
-        (17.0, ["１５～１９年", "15～19年", "１５年以上", "15年以上"]),
-        (22.0, ["２０年以上", "20年以上"]),
-    ]
-    col_map = {}
-    for _, row in df.head(10).iterrows():
-        for col_idx, val in enumerate(row):
-            v = str(val).replace("\u3000", "").replace(" ", "").strip()
-            for key, labels in patterns:
-                if key not in col_map:
-                    if any(lbl.replace(" ", "") in v for lbl in labels):
-                        col_map[key] = col_idx
-    return col_map
+    colMap: dict[str | float, int] = {}
+    for _, row in df.head(EXP_HEADER_ROWS).iterrows():
+        for colIdx, val in enumerate(row):
+            v = str(val).replace("　", "").replace(" ", "").strip()
+            for key, labels in _EXP_PATTERNS:
+                if key not in colMap and any(lbl.replace(" ", "") in v for lbl in labels):
+                    colMap[key] = colIdx
+    return colMap
 
 
-def _parse_exp(df: pd.DataFrame, year: int, col_map: dict, new_fmt: bool) -> list:
-    records = []
-    total_col  = col_map.get("total", 3 if new_fmt else 1)
-    name_col   = 1 if new_fmt else 0
-    data_start = find_data_start(df) if new_fmt else None
-
-    if not new_fmt:
-        for i, row in df.iterrows():
-            v = str(row.iloc[0]).replace("\u3000", "").strip()
-            if (len(v) > 2 and "区" not in v and "nan" not in v
-                    and not v.startswith("第") and not re.match(r"^\d", v)
-                    and "歳" not in v):
-                data_start = i
-                break
-
-    if data_start is None:
-        return records
-
-    for i in range(data_start, len(df)):
-        row = df.iloc[i]
-        raw  = str(row.iloc[name_col]).replace("\n", "")
-        name = raw.replace("\u3000", "").strip()
-
-        # 年齢行スキップ
-        if (re.search(r"\d+\s*[～~\s]+\s*\d+", name)
-                or "17歳" in name or "19歳" in name or "１９歳" in name):
+def _expRecords(row: pd.Series, year: int, occ: str, colMap: dict[str | float, int]) -> list[dict]:
+    """1 職種の行から、経験年数バンドごとのレコードを作る（給与・賞与は隣り合う列）"""
+    records: list[dict] = []
+    for expYears, col in colMap.items():
+        if expYears == EXP_TOTAL_KEY or col >= len(row):
             continue
-        # 深いインデントスキップ（新形式）
-        if new_fmt and raw.startswith("\u3000\u3000\u3000"):
+        wage  = safeNum(row.iloc[col])
+        bonus = safeNum(row.iloc[col + 1]) if col + 1 < len(row) else np.nan
+        if np.isnan(wage) or wage <= 0:
             continue
-
-        if not name or name == "nan" or len(name) < 2:
-            continue
-
-        # 旧形式: 職種名末尾の(男)除去
-        if not new_fmt:
-            name = re.sub(r"\s*\(.*?\)\s*$", "", name).strip()
-        occ = clean_name(name)
-
-        total_w = safe_num(row.iloc[total_col])
-        if np.isnan(total_w) or total_w <= 10:
-            continue
-
-        for exp_yr, col in col_map.items():
-            if exp_yr == "total":
-                continue
-            if col >= len(row):
-                continue
-            w = safe_num(row.iloc[col])
-            b = safe_num(row.iloc[col + 1]) if col + 1 < len(row) else np.nan
-            if not np.isnan(w) and w > 0:
-                records.append({
-                    "year": year, "occupation": occ,
-                    "experience_years": float(exp_yr),
-                    "monthly_wage": w / 10,
-                    "annual_bonus": b / 10 if not np.isnan(b) else np.nan,
-                })
+        records.append({
+            "year": year, "occupation": occ,
+            "experience_years": float(expYears),
+            "monthly_wage": toManYen(wage),
+            "annual_bonus": toManYen(bonus),
+        })
     return records
 
 
-def process_experience_wage() -> pd.DataFrame:
-    print("[経験年数別給与]")
-    files = list_xlsx("exp")
-    print(f"  対象: {len(files)} ファイル")
-    records = []
+def _parseExp(df: pd.DataFrame, year: int, colMap: dict[str | float, int], isNewFormat: bool) -> list[dict]:
+    records: list[dict] = []
+    totalCol  = colMap.get(EXP_TOTAL_KEY, EXP_NEW_TOTAL_COL if isNewFormat else EXP_OLD_TOTAL_COL)
+    nameCol   = EXP_NEW_NAME_COL if isNewFormat else EXP_OLD_NAME_COL
+    dataStart = findDataStart(df) if isNewFormat else _findOldDataStart(df, shouldExcludeTilde=False)
+    if dataStart is None:
+        return records
 
-    for path in files:
-        year = extract_year(os.path.basename(path))
-        try:
-            df      = pd.read_excel(path, header=None, dtype=str)
-            col_map = _get_exp_col_map(df)
-            if not col_map:
-                print(f"  ⚠ 列マップ取得失敗: {os.path.basename(path)}")
-                continue
-            records.extend(_parse_exp(df, year, col_map, new_fmt=(year >= 2020)))
-        except Exception as e:
-            print(f"  ⚠ {os.path.basename(path)}: {e}")
+    for i in range(dataStart, len(df)):
+        row  = df.iloc[i]
+        raw  = str(row.iloc[nameCol]).replace("\n", "")
+        name = raw.replace("　", "").strip()
 
-    df_out = pd.DataFrame(records)
-    df_out["annual_income"] = (
-        df_out["monthly_wage"] * 12
-        + df_out["annual_bonus"].fillna(df_out["monthly_wage"] * 1.5)
-    )
-    df_out.to_csv(os.path.join(OUT_DIR, "experience_wage_all.csv"), index=False, encoding="utf-8-sig")
-    print(f"  ✅ experience_wage_all.csv: {len(df_out):,} レコード "
-          f"({df_out['year'].min()}〜{df_out['year'].max()}年)")
-    return df_out
+        # 年齢行スキップ
+        if re.search(r"\d+\s*[～~\s]+\s*\d+", name) or "17歳" in name or "19歳" in name or "１９歳" in name:
+            continue
+        # 深いインデントスキップ（新形式）
+        if isNewFormat and raw.startswith(DEEP_INDENT):
+            continue
+        if not name or name == "nan" or len(name) < MIN_NAME_LENGTH:
+            continue
+
+        # 旧形式: 職種名末尾の(男)除去
+        if not isNewFormat:
+            name = re.sub(r"\s*\(.*?\)\s*$", "", name).strip()
+
+        totalWage = safeNum(row.iloc[totalCol])
+        if np.isnan(totalWage) or totalWage <= MIN_VALID_WAGE:
+            continue
+        records.extend(_expRecords(row, year, cleanName(name), colMap))
+    return records
+
+
+def _parseExpFile(df: pd.DataFrame, year: int) -> list[dict]:
+    colMap = _getExpColMap(df)
+    if not colMap:
+        logger.warning("  ⚠ 列マップ取得失敗: %d 年のファイル", year)
+        return []
+    return _parseExp(df, year, colMap, isNewFormat=(year >= NEW_FORMAT_FROM_YEAR))
+
+
+def processExperienceWage() -> pd.DataFrame:
+    logger.info("[経験年数別給与]")
+    dfOut = addAnnualIncome(pd.DataFrame(_readFiles("exp", _parseExpFile)), bonusMonths=EXP_BONUS_MONTHS)
+    saveCsv(dfOut, "experience_wage_all.csv")
+    logger.info("  ✅ experience_wage_all.csv: %s レコード (%s〜%s年)",
+                f"{len(dfOut):,}", dfOut["year"].min(), dfOut["year"].max())
+    return dfOut
 
 
 # ══════════════════════════════════════════════════════
 # メイン
 # ══════════════════════════════════════════════════════
-def main():
-    print("\n" + "=" * 60)
-    print("  Step1: data/raw → data/processed  変換開始")
-    print("=" * 60 + "\n")
+def main() -> None:
+    rule = "=" * SECTION_RULE_WIDTH
+    logger.info("\n%s\n  Step1: data/raw → data/processed  変換開始\n%s\n", rule, rule)
 
-    process_occupation_wage();  print()
-    process_age_wage();         print()
-    process_experience_wage();  print()
-    process_monthly_labor();    print()
-    process_gdp();              print()
-    process_cpi()
+    for process in (processOccupationWage, processAgeWage, processExperienceWage,
+                    processMonthlyLabor, processGdp):
+        process()
+        logger.info("")
+    processCpi()
 
-    print("\n" + "=" * 60)
-    print("  Step1 完了 → data/processed/")
-    print("=" * 60 + "\n")
+    logger.info("\n%s\n  Step1 完了 → data/processed/\n%s\n", rule, rule)
 
 
 if __name__ == "__main__":

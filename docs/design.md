@@ -20,7 +20,10 @@ reskill-simu/
 │   ├── step1_macro.py          # Step1 のマクロ経済系（勤労統計・GDP・CPI）
 │   ├── step2_to_master.py      # データ構築（processed → master）
 │   ├── step3_train.py          # モデル訓練・保存
-│   └── model_wrappers.py       # Wrapper クラス（LGBM・CatBoost・Stacking）
+│   ├── step3_models.py         # Step3 の各モデル定義・CV評価つき訓練
+│   ├── model_wrappers.py       # Wrapper クラス（LGBM・CatBoost・Stacking）
+│   ├── model_types.py          # モデル辞書（models.pkl の中身）の型定義
+│   └── log_config.py           # バッチ処理のログ出力設定
 ├── data/
 │   ├── raw/                    # e-stat 元データ（xlsx/csv）
 │   ├── processed/              # 整形済みCSV（6ファイル）
@@ -71,12 +74,12 @@ Streamlit UI（ブラウザ）
 
 | 関数 | 入力 | 出力 | 説明 |
 |---|---|---|---|
-| `process_occupation_wage()` | raw/職種別/*.xlsx | occupation_wage_all.csv | 旧形式(〜2019)/新形式(2020〜)を自動判定して解析 |
-| `process_age_wage()` | raw/年齢階級別/*.xlsx | age_wage_all.csv | 職種×年齢階級×年の給与データ |
-| `process_experience_wage()` | raw/経験年数別/*.xlsx | experience_wage_all.csv | 経験年数バンドの列インデックスを動的検出 |
-| `process_monthly_labor()` | raw/毎月勤労統計/*.xlsx | monthly_labor_all.csv | 「調査産業計」行から前年比を抽出 |
-| `process_gdp()` | raw/国民経済計算/*.csv | gdp_annual.csv | shift_jis, 年度→暦年変換 |
-| `process_cpi()` | raw/消費者物価指数/*.xlsx | cpi_annual.csv | skiprows=14, col8=年, col12=総合指数 |
+| `processOccupationWage()` | raw/職種別/*.xlsx | occupation_wage_all.csv | 旧形式(〜2019)/新形式(2020〜)を自動判定して解析 |
+| `processAgeWage()` | raw/年齢階級別/*.xlsx | age_wage_all.csv | 職種×年齢階級×年の給与データ |
+| `processExperienceWage()` | raw/経験年数別/*.xlsx | experience_wage_all.csv | 経験年数バンドの列インデックスを動的検出 |
+| `processMonthlyLabor()` | raw/毎月勤労統計/*.xlsx | monthly_labor_all.csv | 「調査産業計」行から前年比を抽出 |
+| `processGdp()` | raw/国民経済計算/*.csv | gdp_annual.csv | shift_jis, 年度→暦年変換 |
+| `processCpi()` | raw/消費者物価指数/*.xlsx | cpi_annual.csv | skiprows=14, col8=年, col12=総合指数 |
 
 **フォーマット差異対応（職種別・年齢別・経験年数別）**
 
@@ -97,11 +100,11 @@ Streamlit UI（ブラウザ）
 
 | 関数 | 入力 | 出力 | 説明 |
 |---|---|---|---|
-| `build_occupation_list()` | occupation_wage_all.csv | occupation_list.csv | 2024年最新・重複除去・年収フィルタ（100〜3000万） |
-| `build_age_curve()` | age_wage_all.csv | age_curve.csv | 2024年全職種平均・昇給率（隣接階級比・-5〜12%クリップ） |
-| `build_exp_curve()` | experience_wage_all.csv | exp_curve.csv | 2024年全職種平均・経験年数別 |
-| `build_ml_dataset()` | occupation_list + age_wage + exp_wage | ml_dataset.csv | 職種×年齢×経験の組み合わせで合成年収を生成 |
-| `build_macro_params()` | monthly_labor + gdp + cpi | macro_params.json | 直近10年平均・名目/実質賃金成長率 |
+| `buildOccupationList()` | occupation_wage_all.csv | occupation_list.csv | 2024年最新・重複除去・年収フィルタ（100〜3000万） |
+| `buildAgeCurve()` | age_wage_all.csv | age_curve.csv | 2024年全職種平均・昇給率（隣接階級比・-5〜12%クリップ） |
+| `buildExpCurve()` | experience_wage_all.csv | exp_curve.csv | 2024年全職種平均・経験年数別 |
+| `buildMlDataset()` | occupation_list + age_wage + exp_wage | ml_dataset.csv | 職種×年齢×経験の組み合わせで合成年収を生成 |
+| `buildMacroParams()` | monthly_labor + gdp + cpi | macro_params.json | 直近10年平均・名目/実質賃金成長率 |
 
 **MLデータセット生成ロジック**
 
@@ -203,8 +206,8 @@ predict(X):
 | 定数・関数 | 説明 |
 |---|---|
 | `OCCUPATION_CATEGORIES` | 15カテゴリ・148職種のマスタ定数 |
-| `get_category(occ)` | 職種名→大分類変換（全角/半角の表記ゆれを吸収） |
-| `build_category_occ_map(occs)` | CSV職種リストをカテゴリ別に振り分けた辞書を返す |
+| `getCategory(occ)` | 職種名→大分類変換（全角/半角の表記ゆれを吸収） |
+| `buildCategoryOccMap(occs)` | CSV職種リストをカテゴリ別に振り分けた辞書を返す |
 
 #### 3.4.2 simulation.py
 
@@ -212,22 +215,22 @@ predict(X):
 |---|---|
 | `_AGE_MIDS / _AGE_LABELS` | 年齢階級の代表値・ラベル定数 |
 | `_FE_MODELS` | 特徴量エンジニアリングが必要なモデルキーの集合 |
-| `_add_features(X)` | FE（age_sq / age_x_exp / exp_ratio / prime_age_flag）を付与 |
-| `predict(models, key, occ, age, exp)` | モデル種別に応じてFE適用・予測値（万円）を返す |
-| `get_one_step_down_income(occ, age, path)` | 1段下の年齢階級の統計平均年収を返す |
+| `addFeatures(X)`（model_wrappers.py から import） | FE（age_sq / age_x_exp / exp_ratio / prime_age_flag）を付与 |
+| `predict(models, modelKey, occupation, age, experience)` | モデル種別に応じてFE適用・予測値（万円）を返す |
+| `getOneStepDownIncome(occName, currentAge, ageAllPath)` | 1段下の年齢階級の統計平均年収を返す |
 | `simulate(...)` | 50年間の現状維持・転職後シミュレーション |
-| `calc_roi(sq, cc, cost)` | 投資回収月数・生涯差益を計算 |
+| `calcRoi(statusQuo, careerChange, cost)` | 投資回収月数・生涯差益を計算 |
 
 **predict() の振り分けロジック**
 
 ```python
 _FE_MODELS = frozenset({"custom", "xgboost", "elasticnet", "gradient_boosting"})
 
-def predict(models, key, occ, age, exp) -> float:
-    X = DataFrame([{"occupation": occ, "age": age, "experience_years": exp}])
-    if key != "stacking" and key in _FE_MODELS:
-        X = _add_features(X)
-    return float(models[key]["pipeline"].predict(X)[0])
+def predict(models, modelKey, occupation, age, experience) -> float:
+    X = DataFrame([{"occupation": occupation, "age": age, "experience_years": experience}])
+    if modelKey != "stacking" and modelKey in _FE_MODELS:
+        X = addFeatures(X)
+    return float(models[modelKey]["pipeline"].predict(X)[0])
     # stacking は内部で各ベースモデルのFEを処理するため除外
 ```
 
@@ -235,38 +238,38 @@ def predict(models, key, occ, age, exp) -> float:
 
 | 関数 | 説明 |
 |---|---|
-| `render_sidebar(occ_list, models, macro)` | サイドバー全UIを描画し、全パラメータをタプルで返す |
+| `renderSidebar(occList, models, macro)` | サイドバー全UIを描画し、全パラメータを SidebarInputs（NamedTuple）で返す |
 
 #### 3.4.4 ui/guides.py
 
 | 関数 | 説明 |
 |---|---|
-| `render_model_accuracy(model_dir, *, expanded)` | モデル精度カード＋特徴説明 expander |
-| `render_skill_transfer_static(*, expanded)` | スキル引継ぎ率ガイド（静的テーブル） |
-| `render_skill_transfer_table(...)` | スキル引継ぎ率ガイド（モデル予測による動的テーブル） |
-| `render_macro_guide(*, expanded)` | GDP/CPIシナリオガイド expander |
-| `render_risk_guide(*, expanded)` | リアリティ補正シナリオガイド expander |
-| `render_pre_sim_guides(model_dir)` | シミュレーション実行前のガイドをまとめて展開表示 |
-| `render_post_sim_guides(...)` | シミュレーション実行後のガイドをまとめて折り畳み表示 |
+| `renderModelAccuracy(modelDir, *, isExpanded)` | モデル精度カード＋特徴説明 expander |
+| `renderSkillTransferStatic(*, isExpanded)` | スキル引継ぎ率ガイド（静的テーブル） |
+| `renderSkillTransferTable(...)` | スキル引継ぎ率ガイド（モデル予測による動的テーブル） |
+| `renderMacroGuide(*, isExpanded)` | GDP/CPIシナリオガイド expander |
+| `renderRiskGuide(*, isExpanded)` | リアリティ補正シナリオガイド expander |
+| `renderPreSimGuides(modelDir)` | シミュレーション実行前のガイドをまとめて展開表示 |
+| `renderPostSimGuides(...)` | シミュレーション実行後のガイドをまとめて折り畳み表示 |
 
 #### 3.4.5 ui/results.py
 
 | 関数 | 説明 |
 |---|---|
-| `render_analysis_results(...)` | 分析結果5ブロックを2カラムレイアウトで描画 |
+| `renderAnalysisResults(...)` | 分析結果5ブロックを2カラムレイアウトで描画 |
 
 #### 3.4.6 ui/charts.py
 
 | 関数 | 説明 |
 |---|---|
-| `plot_main_plotly(...)` | 年収推移グラフ（Plotly 2軸: 年収＋累積収支差額） |
-| `plot_all_models_plotly(...)` | 全モデル比較グラフ（Plotly 動的サブプロット） |
+| `plotMainPlotly(...)` | 年収推移グラフ（Plotly 2軸: 年収＋累積収支差額） |
+| `plotAllModelsPlotly(...)` | 全モデル比較グラフ（Plotly 動的サブプロット） |
 
 #### 3.4.7 main.py
 
 | 関数 | 説明 |
 |---|---|
-| `load_assets()` | models.pkl / CSV / JSON を読み込む（@cache_resource）。pkl 未存在時は step1〜3 を自動実行 |
+| `loadAssets()` | models.pkl / CSV / JSON を読み込む（@cache_resource）。pkl 未存在時は step1〜3 を自動実行 |
 | `_show_disclaimer()` | 免責事項ダイアログ（@st.dialog） |
 | `_run_all_model_simulations(models, p, age_curve)` | 全モデルのシミュレーション結果をまとめて返す |
 | `main()` | アプリ全体のフロー制御 |

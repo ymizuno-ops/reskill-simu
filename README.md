@@ -38,7 +38,10 @@ reskill-simu/
 │   ├── step1_macro.py              # Step1 のマクロ経済系（勤労統計・GDP・CPI）
 │   ├── step2_to_master.py          # Step2: processed → master（ML用データ構築）
 │   ├── step3_train.py              # Step3: モデル訓練・保存
-│   └── model_wrappers.py           # Wrapper クラス（LGBM・CatBoost・Stacking）
+│   ├── step3_models.py             # Step3 の各モデル定義・CV評価つき訓練
+│   ├── model_wrappers.py           # Wrapper クラス（LGBM・CatBoost・Stacking）
+│   ├── model_types.py              # モデル辞書（models.pkl の中身）の型定義
+│   └── log_config.py               # バッチ処理のログ出力設定
 │
 ├── data/
 │   ├── raw/                        # e-stat からダウンロードした元データ

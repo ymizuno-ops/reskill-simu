@@ -1,453 +1,208 @@
 """
 step3_train.py
 ==============
-Wrapper class（LGBMWrapper・CatBoostWrapper・StackingEnsemble）と add_features は
+全モデルを訓練し、models/models.pkl と models/model_meta.json に保存する。
+
+各モデルの訓練処理は step3_models.py、
+Wrapper class（LGBMWrapper・CatBoostWrapper・StackingEnsemble）と addFeatures は
 model_wrappers.py に置いている。ここから import するので、step3_train.LGBMWrapper の名前でも引ける。
 """
 
 from __future__ import annotations
 import os, json, pickle, time, warnings
+from collections.abc import Callable
 import pandas as pd
 import numpy as np
-from sklearn.linear_model    import Ridge, ElasticNet
-from sklearn.ensemble        import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.preprocessing   import OneHotEncoder, StandardScaler
-from sklearn.pipeline        import Pipeline
-from sklearn.compose         import ColumnTransformer
-from sklearn.model_selection import cross_val_score, KFold
+from sklearn.model_selection import KFold
 from sklearn.metrics         import r2_score, mean_absolute_error
 
-from model_wrappers import add_features, LGBMWrapper, CatBoostWrapper, StackingEnsemble
+from log_config import getLogger
+from model_types import ModelDict, ModelEntry, ModelMeta, Regressor, Target
+from model_wrappers import LGBMWrapper, CatBoostWrapper, StackingEnsemble, RANDOM_STATE  # noqa: F401
+from step3_models import (
+    CV_FOLDS, BASE_FEATURES, LABEL_WIDTH, buildMeta, logScore,
+    trainRidge, trainRandomForest, trainCustomRidge, trainElasticnet, trainGradientBoosting,
+    trainLightgbm, trainCatboost, trainXgboost,
+)
 
 warnings.filterwarnings("ignore")
+logger = getLogger(__name__)
 
 _HERE      = os.path.dirname(os.path.abspath(__file__))
 MASTER_DIR = os.path.join(_HERE, "..", "data", "master")
 MODEL_DIR  = os.path.join(_HERE, "..", "models")
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-CV = KFold(n_splits=5, shuffle=True, random_state=42)
+OPTIONAL_LIBS = ["lightgbm", "catboost", "xgboost"]
+STACKING_INNER_SPLITS = 4     # ネストCVの内側の fold 数
+STACKING_META_ALPHA   = 1.0
+RANKING_BAR_WIDTH     = 20    # 精度ランキングの棒の長さ（R²=1.0 のとき）
+SECTION_RULE_WIDTH    = 65
+
+Trainer = Callable[[pd.DataFrame, Target], tuple[Regressor, ModelMeta]]
+
+# (キー, 訓練関数, 表示名, 説明, FE の要否)
+SKLEARN_MODELS: list[tuple[str, Trainer, str, str, bool]] = [
+    ("ridge", trainRidge, "Ridge Regression（安定型）",
+     "過学習を抑えた線形回帰。標準的なキャリアパスの推計に最適。", False),
+    ("random_forest", trainRandomForest, "Random Forest（変動型）",
+     "職種固有の昇給パターンを細かく学習。上振れ・下振れ確認に。", False),
+    ("custom", trainCustomRidge, "Custom Ridge（特徴量強化型）",
+     "年齢²・交互作用項を追加した高精度線形モデル。", True),
+    ("elasticnet", trainElasticnet, "ElasticNet（L1+L2正則化）",
+     "RidgeとLassoの融合。不要な特徴量を自動で除外し解釈性が高い。", True),
+    ("gradient_boosting", trainGradientBoosting, "Gradient Boosting（sklearn標準）",
+     "追加インストール不要の勾配ブースティング。安定性と精度のバランスが良い。", True),
+]
+# (キー = ライブラリ名, 訓練関数, 表示名, 説明, FE の要否, ログ用の名前)
+BOOSTING_MODELS: list[tuple[str, Trainer, str, str, bool, str]] = [
+    ("lightgbm", trainLightgbm, "LightGBM（高速ブースティング）",
+     "カテゴリ変数ネイティブ対応。高速かつ高精度。", False, "LightGBM"),
+    ("catboost", trainCatboost, "CatBoost（カテゴリ変数特化）",
+     "職種名をそのまま入力可。チューニング不要で高精度。", False, "CatBoost"),
+    ("xgboost", trainXgboost, "XGBoost（勾配ブースティング標準）",
+     "業界標準モデル。特徴量エンジニアリング込みで高精度。", True, "XGBoost"),
+]
 
 
-# ──────────────────────────────────────────────────────
-# ライブラリ有無チェック
-# ──────────────────────────────────────────────────────
-def _check_libs() -> dict[str, bool]:
-    available = {}
-    for lib in ["lightgbm", "catboost", "xgboost"]:
+def _checkLibs() -> dict[str, bool]:
+    """追加ライブラリごとに import できるかを返す（ない場合はそのモデルを飛ばすため例外にしない）"""
+    isAvailable: dict[str, bool] = {}
+    for lib in OPTIONAL_LIBS:
         try:
             __import__(lib)
-            available[lib] = True
+            isAvailable[lib] = True
         except ImportError:
-            available[lib] = False
-    return available
+            isAvailable[lib] = False
+    return isAvailable
 
 
-# ──────────────────────────────────────────────────────
-# 共通前処理
-# ──────────────────────────────────────────────────────
-def make_ohe_preprocessor(num_features: list[str]) -> ColumnTransformer:
-    return ColumnTransformer(transformers=[
-        ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), ["occupation"]),
-        ("num", StandardScaler(), num_features),
-    ])
-
-
-def _cv_and_fit(pipe, X, y, label: str) -> tuple:
-    t0  = time.time()
-    cv  = cross_val_score(pipe, X, y, cv=CV, scoring="r2")
-    pipe.fit(X, y)
-    r2  = r2_score(y, pipe.predict(X))
-    mae = mean_absolute_error(y, pipe.predict(X))
-    elapsed = time.time() - t0
-    print(f"  {label:<32} R²={r2:.4f}  CV={cv.mean():.4f}±{cv.std():.4f}"
-          f"  MAE={mae:.1f}万円  ({elapsed:.1f}s)")
-    return pipe, {
-        "r2_train":   round(r2, 4),
-        "r2_cv_mean": round(cv.mean(), 4),
-        "r2_cv_std":  round(cv.std(), 4),
-        "mae_train":  round(mae, 2),
-    }
-
-
-# ──────────────────────────────────────────────────────
-# sklearn モデル
-# ──────────────────────────────────────────────────────
-def train_ridge(X, y):
-    pre  = make_ohe_preprocessor(["age", "experience_years"])
-    pipe = Pipeline([("pre", pre), ("model", Ridge(alpha=10.0))])
-    pipe, meta = _cv_and_fit(pipe, X, y, "Ridge Regression")
-    meta["features"] = ["occupation", "age", "experience_years"]
-    return pipe, meta
-
-
-def train_random_forest(X, y):
-    pre  = make_ohe_preprocessor(["age", "experience_years"])
-    pipe = Pipeline([
-        ("pre", pre),
-        ("model", RandomForestRegressor(
-            n_estimators=200, max_depth=12,
-            min_samples_leaf=3, max_features="sqrt",
-            random_state=42, n_jobs=-1,
-        )),
-    ])
-    pipe, meta = _cv_and_fit(pipe, X, y, "Random Forest")
-    meta["features"] = ["occupation", "age", "experience_years"]
-    return pipe, meta
-
-
-def train_custom_ridge(X, y):
-    Xc  = add_features(X)
-    num = ["age", "experience_years", "age_sq", "age_x_exp", "exp_ratio", "prime_age_flag"]
-    pre = make_ohe_preprocessor(num)
-    pipe = Pipeline([("pre", pre), ("model", Ridge(alpha=1.0))])
-    pipe, meta = _cv_and_fit(pipe, Xc, y, "Custom Ridge (+FE)")
-    meta["features"] = ["occupation", "age", "experience_years",
-                        "age_sq", "age_x_exp", "exp_ratio", "prime_age_flag"]
-    return pipe, meta
-
-
-# ──────────────────────────────────────────────────────
-# ElasticNet
-# ──────────────────────────────────────────────────────
-def train_elasticnet(X, y):
-    """
-    L1（Lasso）+ L2（Ridge）の両正則化を組み合わせたモデル。
-    不要な特徴量を自動で0にする効果（スパース性）があり解釈性が高い。
-    特徴量エンジニアリング込みで使用する。
-    """
-    Xc  = add_features(X)
-    num = ["age", "experience_years", "age_sq", "age_x_exp", "exp_ratio", "prime_age_flag"]
-    pre = make_ohe_preprocessor(num)
-    pipe = Pipeline([
-        ("pre", pre),
-        ("model", ElasticNet(
-            alpha=0.001,     # 正則化強度（チューニング済み）
-            l1_ratio=0.7,    # L1:L2 = 70:30（Lasso寄り・スパース性重視）
-            max_iter=5000,
-            random_state=42,
-        )),
-    ])
-    pipe, meta = _cv_and_fit(pipe, Xc, y, "ElasticNet (+FE)")
-    meta["features"] = ["occupation", "age", "experience_years",
-                        "age_sq", "age_x_exp", "exp_ratio", "prime_age_flag"]
-    return pipe, meta
-
-
-# ──────────────────────────────────────────────────────
-# Gradient Boosting (sklearn)
-# ──────────────────────────────────────────────────────
-def train_gradient_boosting(X, y):
-    """
-    sklearn 標準の勾配ブースティング。追加インストール不要。
-    XGBoost・LightGBMより低速だが安定性が高く、過学習に強い。
-    特徴量エンジニアリング込みで使用する。
-    """
-    Xc  = add_features(X)
-    num = ["age", "experience_years", "age_sq", "age_x_exp", "exp_ratio", "prime_age_flag"]
-    pre = make_ohe_preprocessor(num)
-    pipe = Pipeline([
-        ("pre", pre),
-        ("model", GradientBoostingRegressor(
-            n_estimators=300,
-            learning_rate=0.05,
-            max_depth=5,
-            min_samples_leaf=5,
-            subsample=0.8,
-            random_state=42,
-        )),
-    ])
-    pipe, meta = _cv_and_fit(pipe, Xc, y, "GradientBoosting (+FE)")
-    meta["features"] = ["occupation", "age", "experience_years",
-                        "age_sq", "age_x_exp", "exp_ratio", "prime_age_flag"]
-    return pipe, meta
-
-
-# ──────────────────────────────────────────────────────
-# LightGBM
-# ──────────────────────────────────────────────────────
-def train_lightgbm(X, y):
-    t0 = time.time()
-    print(f"  {'LightGBM':<32} CV中...", end="", flush=True)
-    wrapper = LGBMWrapper()
-    cv = cross_val_score(wrapper, X, y, cv=CV, scoring="r2")
-    wrapper.fit(X, y)
-    r2  = r2_score(y, wrapper.predict(X))
-    mae = mean_absolute_error(y, wrapper.predict(X))
-    print(f"\r  {'LightGBM':<32} R²={r2:.4f}  CV={cv.mean():.4f}±{cv.std():.4f}"
-          f"  MAE={mae:.1f}万円  ({time.time()-t0:.1f}s)")
-    meta = {
-        "r2_train": round(r2,4), "r2_cv_mean": round(cv.mean(),4),
-        "r2_cv_std": round(cv.std(),4), "mae_train": round(mae,2),
-        "features": ["occupation", "age", "experience_years"],
-    }
-    return wrapper, meta
-
-
-# ──────────────────────────────────────────────────────
-# CatBoost
-# ──────────────────────────────────────────────────────
-def train_catboost(X, y):
-    """CV は軽量版（iterations=200）で高速化し、最終モデルのみ500iterで訓練"""
-    t0 = time.time()
-    print(f"  {'CatBoost':<32} CV中（200iter）...", end="", flush=True)
-
-    # CV: 軽量版パラメータ
-    cv_wrapper = CatBoostWrapper(iterations=200, learning_rate=0.1, depth=6)
-    cv = cross_val_score(cv_wrapper, X, y, cv=CV, scoring="r2")
-    print(f" CV完了({time.time()-t0:.0f}s) → 最終訓練(500iter)...", end="", flush=True)
-
-    # 最終モデル: 高精度パラメータ
-    final = CatBoostWrapper(iterations=500, learning_rate=0.05, depth=8)
-    final.fit(X, y)
-    r2  = r2_score(y, final.predict(X))
-    mae = mean_absolute_error(y, final.predict(X))
-    print(f"\r  {'CatBoost':<32} R²={r2:.4f}  CV={cv.mean():.4f}±{cv.std():.4f}"
-          f"  MAE={mae:.1f}万円  ({time.time()-t0:.1f}s)")
-    meta = {
-        "r2_train": round(r2,4), "r2_cv_mean": round(cv.mean(),4),
-        "r2_cv_std": round(cv.std(),4), "mae_train": round(mae,2),
-        "features": ["occupation", "age", "experience_years"],
-    }
-    return final, meta
-
-
-# ──────────────────────────────────────────────────────
-# XGBoost
-# ──────────────────────────────────────────────────────
-def train_xgboost(X, y):
-    import xgboost as xgb
-    Xc  = add_features(X)
-    num = ["age", "experience_years", "age_sq", "age_x_exp", "exp_ratio", "prime_age_flag"]
-    pre = make_ohe_preprocessor(num)
-    pipe = Pipeline([
-        ("pre", pre),
-        ("model", xgb.XGBRegressor(
-            n_estimators=500,
-            learning_rate=0.05,
-            max_depth=7,
-            min_child_weight=5,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            reg_alpha=0.1,
-            reg_lambda=1.0,
-            random_state=42,
-            n_jobs=-1,
-            verbosity=0,
-        )),
-    ])
-    pipe, meta = _cv_and_fit(pipe, Xc, y, "XGBoost (+FE)")
-    meta["features"] = ["occupation", "age", "experience_years",
-                        "age_sq", "age_x_exp", "exp_ratio", "prime_age_flag"]
-    return pipe, meta
+def _entry(model: Regressor, meta: ModelMeta, label: str, desc: str, usesFe: bool) -> ModelEntry:
+    # キー名は models.pkl / model_meta.json の形式なので変えない
+    return {"pipeline": model, "meta": meta, "label": label, "desc": desc, "uses_fe": usesFe}
 
 
 # ──────────────────────────────────────────────────────
 # Stacking Ensemble 訓練
 # ──────────────────────────────────────────────────────
-def train_stacking(X: pd.DataFrame, y, base_models: dict):
+def trainStacking(X: pd.DataFrame, y: Target, baseModels: ModelDict) -> tuple[StackingEnsemble, ModelMeta]:
     """
     全ベースモデルを使った Stacking Ensemble を訓練する。
 
     Parameters
     ----------
-    base_models : 訓練済みモデル辞書（"stacking"自身は含まない）
+    baseModels : 訓練済みモデル辞書（"stacking"自身は含まない）
     """
-    import time
-    t0 = time.time()
-    print(f"  {'Stacking Ensemble':<32} OOF訓練中...")
-
-    stacking = StackingEnsemble(
-        base_models=base_models,
-        n_splits=5,
-        meta_alpha=1.0,
-    )
+    startedAt = time.time()
+    logger.info("  %s OOF訓練中...", f"{'Stacking Ensemble':<{LABEL_WIDTH}}")
 
     # CV: StackingEnsemble 自体を5-fold評価
     # （内部でさらにOOFを使うためネストCVになる → 計算コスト大のため簡易評価）
-    # 簡易CV: 各foldでfitしてOOF R²を計算
-    cv_scores = []
-    kf = KFold(n_splits=5, shuffle=True, random_state=42)
-    y_arr = np.asarray(y)
-    for fold_i, (tr_idx, val_idx) in enumerate(kf.split(X), 1):
-        print(f"    CV fold {fold_i}/5...", end="", flush=True)
-        s_fold = StackingEnsemble(base_models=base_models, n_splits=4, meta_alpha=1.0)
-        s_fold.fit(X.iloc[tr_idx].reset_index(drop=True), y_arr[tr_idx])
-        pred = s_fold.predict(X.iloc[val_idx].reset_index(drop=True))
-        from sklearn.metrics import r2_score
-        score = r2_score(y_arr[val_idx], pred)
-        cv_scores.append(score)
-        print(f" R²={score:.4f}")
-
-    cv_arr = np.array(cv_scores)
+    cvScores = []
+    kf = KFold(n_splits=CV_FOLDS, shuffle=True, random_state=RANDOM_STATE)
+    yArr = np.asarray(y)
+    for foldNo, (trainIdx, valIdx) in enumerate(kf.split(X), 1):
+        logger.info("    CV fold %d/%d...", foldNo, CV_FOLDS)
+        foldModel = StackingEnsemble(base_models=baseModels, n_splits=STACKING_INNER_SPLITS,
+                                     meta_alpha=STACKING_META_ALPHA)
+        foldModel.fit(X.iloc[trainIdx].reset_index(drop=True), yArr[trainIdx])
+        score = r2_score(yArr[valIdx], foldModel.predict(X.iloc[valIdx].reset_index(drop=True)))
+        cvScores.append(score)
+        logger.info("    CV fold %d/%d R²=%.4f", foldNo, CV_FOLDS, score)
 
     # 全データで最終訓練
-    print(f"    最終訓練中（全データ）...", end="", flush=True)
-    stacking.fit(X, y_arr)
-    print(" 完了")
+    logger.info("    最終訓練中（全データ）...")
+    stacking = StackingEnsemble(base_models=baseModels, n_splits=CV_FOLDS, meta_alpha=STACKING_META_ALPHA)
+    stacking.fit(X, yArr)
+    logger.info("    最終訓練 完了")
 
-    r2  = r2_score(y_arr, stacking.predict(X))
-    mae = mean_absolute_error(y_arr, stacking.predict(X))
-    elapsed = time.time() - t0
+    pred = stacking.predict(X)
+    r2, mae = r2_score(yArr, pred), mean_absolute_error(yArr, pred)
+    cvArr = np.array(cvScores)
+    logScore("Stacking Ensemble", r2, cvArr, mae, startedAt)
 
-    print(f"  {'Stacking Ensemble':<32} R²={r2:.4f}  CV={cv_arr.mean():.4f}±{cv_arr.std():.4f}"
-          f"  MAE={mae:.1f}万円  ({elapsed:.1f}s)")
-
-    meta = {
-        "r2_train":   round(r2, 4),
-        "r2_cv_mean": round(cv_arr.mean(), 4),
-        "r2_cv_std":  round(cv_arr.std(), 4),
-        "mae_train":  round(mae, 2),
-        "features":   ["occupation", "age", "experience_years"],
-        "base_models": list(base_models.keys()),
-    }
+    meta = buildMeta(r2, cvArr, mae, BASE_FEATURES)
+    meta["base_models"] = list(baseModels.keys())
     return stacking, meta
 
 
 # ──────────────────────────────────────────────────────
 # メイン
 # ──────────────────────────────────────────────────────
-def main():
-    np.random.seed(42)
-
-    print("\n" + "=" * 65)
-    print("  Step3: モデル訓練（sklearn 5モデル + LightGBM / CatBoost / XGBoost）")
-    print("=" * 65 + "\n")
-
-    df = pd.read_csv(os.path.join(MASTER_DIR, "ml_dataset.csv"))
-    print(f"訓練データ: {len(df):,} サンプル, {df['occupation'].nunique()} 職種\n")
-
-    X = df[["occupation", "age", "experience_years"]]
-    y = df["annual_income"]
-
-    libs = _check_libs()
-    print(f"利用可能ライブラリ: "
-          f"LightGBM={'✅' if libs['lightgbm'] else '❌'} / "
-          f"CatBoost={'✅' if libs['catboost'] else '❌'} / "
-          f"XGBoost={'✅' if libs['xgboost'] else '❌'}\n")
+def _trainAll(X: pd.DataFrame, y: Target) -> ModelDict:
+    isAvailable = _checkLibs()
+    mark = {True: "✅", False: "❌"}
+    logger.info("利用可能ライブラリ: LightGBM=%s / CatBoost=%s / XGBoost=%s\n",
+                mark[isAvailable["lightgbm"]], mark[isAvailable["catboost"]], mark[isAvailable["xgboost"]])
 
     # ── sklearn モデル（常に訓練）──
-    print("[sklearn モデル]")
-    ridge_pipe,  ridge_meta  = train_ridge(X, y)
-    rf_pipe,     rf_meta     = train_random_forest(X, y)
-    custom_pipe, custom_meta = train_custom_ridge(X, y)
-    en_pipe,     en_meta     = train_elasticnet(X, y)
-    gb_pipe,     gb_meta     = train_gradient_boosting(X, y)
-
-    models = {
-        "ridge": {
-            "pipeline": ridge_pipe, "meta": ridge_meta,
-            "label": "Ridge Regression（安定型）",
-            "desc":  "過学習を抑えた線形回帰。標準的なキャリアパスの推計に最適。",
-            "uses_fe": False,
-        },
-        "random_forest": {
-            "pipeline": rf_pipe, "meta": rf_meta,
-            "label": "Random Forest（変動型）",
-            "desc":  "職種固有の昇給パターンを細かく学習。上振れ・下振れ確認に。",
-            "uses_fe": False,
-        },
-        "custom": {
-            "pipeline": custom_pipe, "meta": custom_meta,
-            "label": "Custom Ridge（特徴量強化型）",
-            "desc":  "年齢²・交互作用項を追加した高精度線形モデル。",
-            "uses_fe": True,
-        },
-        "elasticnet": {
-            "pipeline": en_pipe, "meta": en_meta,
-            "label": "ElasticNet（L1+L2正則化）",
-            "desc":  "RidgeとLassoの融合。不要な特徴量を自動で除外し解釈性が高い。",
-            "uses_fe": True,
-        },
-        "gradient_boosting": {
-            "pipeline": gb_pipe, "meta": gb_meta,
-            "label": "Gradient Boosting（sklearn標準）",
-            "desc":  "追加インストール不要の勾配ブースティング。安定性と精度のバランスが良い。",
-            "uses_fe": True,
-        },
-    }
+    logger.info("[sklearn モデル]")
+    models: ModelDict = {}
+    for key, train, label, desc, usesFe in SKLEARN_MODELS:
+        models[key] = _entry(*train(X, y), label, desc, usesFe)
 
     # ── 勾配ブースティング系（ライブラリがあれば）──
-    if any(libs.values()):
-        print()
-        print("[勾配ブースティング系モデル]")
-
-    if libs["lightgbm"]:
-        lgbm_model, lgbm_meta = train_lightgbm(X, y)
-        models["lightgbm"] = {
-            "pipeline": lgbm_model, "meta": lgbm_meta,
-            "label": "LightGBM（高速ブースティング）",
-            "desc":  "カテゴリ変数ネイティブ対応。高速かつ高精度。",
-            "uses_fe": False,
-        }
-    else:
-        print("  ⚠ LightGBM スキップ（pip install lightgbm）")
-
-    if libs["catboost"]:
-        cb_model, cb_meta = train_catboost(X, y)
-        models["catboost"] = {
-            "pipeline": cb_model, "meta": cb_meta,
-            "label": "CatBoost（カテゴリ変数特化）",
-            "desc":  "職種名をそのまま入力可。チューニング不要で高精度。",
-            "uses_fe": False,
-        }
-    else:
-        print("  ⚠ CatBoost スキップ（pip install catboost）")
-
-    if libs["xgboost"]:
-        xgb_model, xgb_meta = train_xgboost(X, y)
-        models["xgboost"] = {
-            "pipeline": xgb_model, "meta": xgb_meta,
-            "label": "XGBoost（勾配ブースティング標準）",
-            "desc":  "業界標準モデル。特徴量エンジニアリング込みで高精度。",
-            "uses_fe": True,
-        }
-    else:
-        print("  ⚠ XGBoost スキップ（pip install xgboost）")
+    if any(isAvailable.values()):
+        logger.info("\n[勾配ブースティング系モデル]")
+    for key, train, label, desc, usesFe, displayName in BOOSTING_MODELS:
+        if not isAvailable[key]:
+            logger.warning("  ⚠ %s スキップ（pip install %s）", displayName, key)
+            continue
+        models[key] = _entry(*train(X, y), label, desc, usesFe)
 
     # ── Stacking Ensemble（全ベースモデルが揃ってから訓練）──
-    print()
-    print("[Stacking Ensemble]")
-    print("  ※ ネストCVのため時間がかかります（5〜15分）")
+    logger.info("\n[Stacking Ensemble]")
+    logger.info("  ※ ネストCVのため時間がかかります（5〜15分）")
     try:
-        stacking_model, stacking_meta = train_stacking(X, y, models)
-        models["stacking"] = {
-            "pipeline": stacking_model,
-            "meta":     stacking_meta,
-            "label":    "Stacking Ensemble（全モデル統合）",
-            "desc":     f"全{len(models)}ベースモデルのOOF予測をRidgeで統合。最高精度を目指す。",
-            "uses_fe":  False,   # StackingEnsemble内部で処理するため不要
-        }
-    except Exception as e:
-        print(f"  ⚠ Stacking スキップ: {e}")
+        stackingModel, stackingMeta = trainStacking(X, y, models)
+        models["stacking"] = _entry(
+            stackingModel, stackingMeta, "Stacking Ensemble（全モデル統合）",
+            f"全{len(models)}ベースモデルのOOF予測をRidgeで統合。最高精度を目指す。",
+            False,   # StackingEnsemble内部で処理するため不要
+        )
+    except Exception:
+        logger.exception("  ⚠ Stacking スキップ（他のモデルは保存を続ける）")
+    return models
 
-    # ── 保存 ──
-    pkl_path = os.path.join(MODEL_DIR, "models.pkl")
-    with open(pkl_path, "wb") as f:
+
+def _save(models: ModelDict) -> None:
+    pklPath = os.path.join(MODEL_DIR, "models.pkl")
+    with open(pklPath, "wb") as f:
         pickle.dump(models, f)
 
-    meta_out = {
+    metaOut = {
         k: v["meta"] | {"label": v["label"], "desc": v["desc"]}
         for k, v in models.items()
     }
-    meta_path = os.path.join(MODEL_DIR, "model_meta.json")
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(meta_out, f, ensure_ascii=False, indent=2)
+    with open(os.path.join(MODEL_DIR, "model_meta.json"), "w", encoding="utf-8") as f:
+        json.dump(metaOut, f, ensure_ascii=False, indent=2)
 
-    print(f"\n  ✅ {len(models)} モデルを保存 → {pkl_path}")
+    logger.info("\n  ✅ %d モデルを保存 → %s", len(models), pklPath)
 
-    # ── 精度ランキング ──
-    print("\n[精度ランキング（CV R²降順）]")
-    ranked = sorted(models.items(), key=lambda x: x[1]["meta"]["r2_cv_mean"], reverse=True)
-    for rank, (k, v) in enumerate(ranked, 1):
-        m   = v["meta"]
-        bar = "█" * int(m["r2_cv_mean"] * 20)
-        print(f"  {rank}. {v['label']:<30} CV R²={m['r2_cv_mean']:.4f} {bar}")
 
-    print("\n" + "=" * 65)
-    print("  Step3 完了 → models/")
-    print("=" * 65 + "\n")
+def _logRanking(models: ModelDict) -> None:
+    logger.info("\n[精度ランキング（CV R²降順）]")
+    ranked = sorted(models.values(), key=lambda v: v["meta"]["r2_cv_mean"], reverse=True)
+    for rank, entry in enumerate(ranked, 1):
+        cvMean = entry["meta"]["r2_cv_mean"]
+        bar = "█" * int(cvMean * RANKING_BAR_WIDTH)
+        logger.info("  %d. %s CV R²=%.4f %s", rank, f"{entry['label']:<30}", cvMean, bar)
 
+
+def main() -> ModelDict:
+    np.random.seed(RANDOM_STATE)
+
+    rule = "=" * SECTION_RULE_WIDTH
+    logger.info("\n%s\n  Step3: モデル訓練（sklearn 5モデル + LightGBM / CatBoost / XGBoost）\n%s\n", rule, rule)
+
+    df = pd.read_csv(os.path.join(MASTER_DIR, "ml_dataset.csv"))
+    logger.info("訓練データ: %s サンプル, %d 職種\n", f"{len(df):,}", df["occupation"].nunique())
+
+    models = _trainAll(df[BASE_FEATURES], df["annual_income"])
+    _save(models)
+    _logRanking(models)
+
+    logger.info("\n%s\n  Step3 完了 → models/\n%s\n", rule, rule)
     return models
 
 

@@ -16,8 +16,11 @@ reskill-simu/
 │   │   ├── results.py          # 分析結果5ブロックの描画
 │   │   └── sidebar.py          # サイドバー UI・パラメータ取得
 │   ├── step1_to_processed.py   # データ変換（raw → processed）
+│   ├── step1_common.py         # Step1 の共通部（パス設定・ユーティリティ）
+│   ├── step1_macro.py          # Step1 のマクロ経済系（勤労統計・GDP・CPI）
 │   ├── step2_to_master.py      # データ構築（processed → master）
-│   └── step3_train.py          # モデル訓練・保存
+│   ├── step3_train.py          # モデル訓練・保存
+│   └── model_wrappers.py       # Wrapper クラス（LGBM・CatBoost・Stacking）
 ├── data/
 │   ├── raw/                    # e-stat 元データ（xlsx/csv）
 │   ├── processed/              # 整形済みCSV（6ファイル）

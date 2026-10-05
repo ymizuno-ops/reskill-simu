@@ -34,8 +34,11 @@ reskill-simu/
 │   │   ├── results.py              # 分析結果レンダリング
 │   │   └── sidebar.py              # サイドバー UI
 │   ├── step1_to_processed.py       # Step1: raw → processed（xlsx/csv 解析）
+│   ├── step1_common.py             # Step1 の共通部（パス設定・ユーティリティ）
+│   ├── step1_macro.py              # Step1 のマクロ経済系（勤労統計・GDP・CPI）
 │   ├── step2_to_master.py          # Step2: processed → master（ML用データ構築）
-│   └── step3_train.py              # Step3: モデル訓練・保存
+│   ├── step3_train.py              # Step3: モデル訓練・保存
+│   └── model_wrappers.py           # Wrapper クラス（LGBM・CatBoost・Stacking）
 │
 ├── data/
 │   ├── raw/                        # e-stat からダウンロードした元データ
@@ -324,7 +327,7 @@ Step 6  アプリの起動
   ■ よくあるエラー
     起動エラー: Can't get attribute 'LGBMWrapper'
     → src/main.py が古いバージョンです。最新版に差し替えてください。
-      （src/main.py の先頭付近に from step3_train import LGBMWrapper が必要です）
+      （src/main.py の先頭付近に from model_wrappers import LGBMWrapper が必要です）
 
     起動エラー: models.pkl が見つかりません
     → Step 5 のモデル訓練が完了していません。
@@ -452,7 +455,3 @@ v4.0  Stacking Ensemble を追加（計 9 モデル）
 ================================================================================
 
   ・テストコードの実装（tests/ 配下。未着手）
-  ・src/step3_train.py の分割検討（661 行）
-      注意: models.pkl に step3_train.LGBMWrapper 等のクラス名が保存されている。
-            クラスを別モジュールへ移す場合は、再学習するか、step3_train から
-            再エクスポートを残さないと、保存済みモデルが読み込めなくなる。

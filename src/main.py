@@ -11,10 +11,8 @@ import streamlit as st
 warnings.filterwarnings("ignore")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-try:
-    from step3_train import LGBMWrapper, CatBoostWrapper, StackingEnsemble  # noqa: F401
-except ImportError:
-    pass
+# models.pkl の復元に必要（step3_train.py を直接実行して保存した場合、クラスは __main__ 側の名前で探される）
+from model_wrappers import LGBMWrapper, CatBoostWrapper, StackingEnsemble  # noqa: F401
 
 from simulation import simulate, calc_roi
 from ui.sidebar import render_sidebar
@@ -22,10 +20,10 @@ from ui.charts import plot_main_plotly, plot_all_models_plotly
 from ui.guides import render_pre_sim_guides, render_post_sim_guides
 from ui.results import render_analysis_results
 
-_HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # リポジトリのルート
-MASTER_DIR = os.path.join(_HERE, "data", "master")
-MODEL_DIR = os.path.join(_HERE, "models")
-AGE_ALL_PATH = os.path.join(_HERE, "data", "processed", "age_wage_all.csv")
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # リポジトリのルート
+MASTER_DIR = os.path.join(_ROOT, "data", "master")
+MODEL_DIR = os.path.join(_ROOT, "models")
+AGE_ALL_PATH = os.path.join(_ROOT, "data", "processed", "age_wage_all.csv")
 
 _MODEL_KEY_ORDER = [
     "ridge", "elasticnet", "custom", "random_forest", "gradient_boosting",

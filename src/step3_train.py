@@ -22,6 +22,7 @@ warnings.filterwarnings("ignore")
 _HERE      = os.path.dirname(os.path.abspath(__file__))
 MASTER_DIR = os.path.join(_HERE, "..", "data", "master")
 MODEL_DIR  = os.path.join(_HERE, "..", "models")
+CATBOOST_TRAIN_DIR = os.path.join(_HERE, "..", "tmp", "catboost_info")
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 CV = KFold(n_splits=5, shuffle=True, random_state=42)
@@ -157,6 +158,7 @@ class CatBoostWrapper(BaseEstimator, RegressorMixin):
             random_state=self.random_state,
             verbose=0,
             thread_count=-1,
+            train_dir=CATBOOST_TRAIN_DIR,
         )
         self.model_.fit(X, y, cat_features=["occupation"])
         return self

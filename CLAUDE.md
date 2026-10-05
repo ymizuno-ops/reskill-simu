@@ -125,7 +125,7 @@ SNS投稿・本番DB操作・外部APIへのPOSTを含む自律操作は、`gate
 
 **ディレクトリの例外**(`project-layout` にないが、このプロジェクトで承認済みの置き場):
 <!-- この欄はプロジェクト側で書き足す。sync-template はここに書き足された行を残し、テンプレートの「(なし)」で上書きしない -->
-- (なし)
+- models/: 学習済みモデル（models.pkl・model_meta.json）。`.gitignore` は `models/*.pkl` だけを除外している
 
 ### スキル（`/skill-name` で呼び出し）
 

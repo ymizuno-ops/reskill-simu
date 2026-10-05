@@ -5,16 +5,25 @@ Step3 で訓練する各モデル（sklearn 5モデル + LightGBM / CatBoost / X
 定義と、CV 評価つきの訓練処理（step3_train.py から分離）。
 """
 
+# 型ヒントの新しい書き方を使えるようにする指定（詳しくは log_config.py）。
 from __future__ import annotations
+# time: 時刻を扱う標準モジュール。学習にかかった秒数を測るのに使う。
 import time
 import pandas as pd
 import numpy as np
+# 線形回帰のモデル（予測を抑える仕組み = 正則化の種類が違う）。
 from sklearn.linear_model    import Ridge, ElasticNet
+# 決定木（条件分岐の木）を多数組み合わせるモデル。
 from sklearn.ensemble        import RandomForestRegressor, GradientBoostingRegressor
+# OneHotEncoder: 職種名を「その職種なら 1、他は 0」の列に展開する。StandardScaler: 数値を平均 0・ばらつき 1 にそろえる。
 from sklearn.preprocessing   import OneHotEncoder, StandardScaler
+# Pipeline: 前処理とモデルを1つにつなげ、fit・predict を一度で呼べるようにする。
 from sklearn.pipeline        import Pipeline
+# ColumnTransformer: 列ごとに違う前処理をかける。
 from sklearn.compose         import ColumnTransformer
+# cross_val_score: 交差検証で精度を測る関数。
 from sklearn.model_selection import cross_val_score, KFold
+# R²（決定係数。1 に近いほど当てはまりが良い）と、MAE（予測と実際の差の絶対値の平均）を計算する関数。
 from sklearn.metrics         import r2_score, mean_absolute_error
 
 from log_config import getLogger
@@ -26,6 +35,7 @@ logger = getLogger(__name__)
 # 意味: 精度評価（交差検証 = データを分けて、学習に使っていない部分を当てられるか試す方法）の分割数。
 # 影響: 増やすと精度の数値が安定するが、学習時間が延びる。画面の精度カードの CV の値が変わる。
 CV_FOLDS = 5
+# 全モデルで共通の分割方法。同じ分け方で比べるので、精度を公平に比較できる。
 CV = KFold(n_splits=CV_FOLDS, shuffle=True, random_state=RANDOM_STATE)
 # 意味: 学習に使う CPU コアの数（-1 = すべて使う）。
 # 影響: 速さだけが変わり、結果は変わらない。他の作業が重くなる場合は 2 などに減らす。
@@ -43,6 +53,7 @@ BASE_NUM_FEATURES = ["age", "experience_years"]
 # 意味: 特徴量強化型のモデルが使う数値の項目（年齢² など、addFeatures が作る列を含む）。
 # 注意: model_wrappers.py の addFeatures が作る列名と一致させる。
 FE_NUM_FEATURES = ["age", "experience_years", "age_sq", "age_x_exp", "exp_ratio", "prime_age_flag"]
+# * でリストを展開して、別のリストの中に並べる（["occupation", "age", ...] と書いたのと同じ）。
 FE_FEATURES = ["occupation", *FE_NUM_FEATURES]
 
 # CatBoost: CV は軽量版で高速化し、最終モデルのみ高精度で訓練する
@@ -57,13 +68,16 @@ CATBOOST_FINAL_PARAMS = {"iterations": 500, "learning_rate": 0.05, "depth": 8}
 # ──────────────────────────────────────────────────────
 # 共通処理
 # ──────────────────────────────────────────────────────
+# 職種は OneHot に、数値の列は標準化する前処理を作る。
 def makeOhePreprocessor(numFeatures: list[str]) -> ColumnTransformer:
     return ColumnTransformer(transformers=[
+        # (名前, 前処理, 対象の列) の組。handle_unknown="ignore" で、学習時になかった職種が来てもエラーにせず全部 0 にする。sparse_output=False で普通の配列を返す。
         ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), ["occupation"]),
         ("num", StandardScaler(), numFeatures),
     ])
 
 
+# 精度の数値を決めた桁数に丸め、辞書にまとめる。
 def buildMeta(r2: float, cvScores: np.ndarray, mae: float, features: list[str]) -> ModelMeta:
     return {
         "r2_train":   round(r2, METRIC_DIGITS),
@@ -74,35 +88,45 @@ def buildMeta(r2: float, cvScores: np.ndarray, mae: float, features: list[str]) 
     }
 
 
+# 1モデル分の精度と所要時間をログに出す。
 def logScore(label: str, r2: float, cvScores: np.ndarray, mae: float, startedAt: float) -> None:
     logger.info("  %s R²=%.4f  CV=%.4f±%.4f  MAE=%.1f万円  (%.1fs)",
+                # {label:<32} は左寄せで32文字分の幅をとる書式。幅を変数にするときは {LABEL_WIDTH} のように入れ子にする。
                 f"{label:<{LABEL_WIDTH}}", r2, cvScores.mean(), cvScores.std(), mae,
                 time.time() - startedAt)
 
 
+# 訓練データでの予測を1回だけ計算し、R² と MAE を求めて、ログと精度情報を作る。
 def _evaluate(model: Regressor, X: pd.DataFrame, y: Target, label: str,
               cvScores: np.ndarray, features: list[str], startedAt: float) -> ModelMeta:
     """訓練済みモデルの訓練データでの精度をログに出し、meta を返す"""
     pred = model.predict(X)
+    # 右辺の2つの値を、左辺の2つの変数にそれぞれ代入する。
     r2, mae = r2_score(y, pred), mean_absolute_error(y, pred)
     logScore(label, r2, cvScores, mae, startedAt)
     return buildMeta(r2, cvScores, mae, features)
 
 
+# 交差検証で精度を測ってから、全データで学習し直す。
 def _cvAndFit(pipe: Pipeline, X: pd.DataFrame, y: Target, label: str,
               features: list[str]) -> tuple[Pipeline, ModelMeta]:
+    # 現在の時刻（秒）。後で差を取って所要時間を出す。
     startedAt = time.time()
+    # 分割ごとに学習と検証を繰り返し、各回の R² を配列で返す（分割数の個数だけ値が並ぶ）。
     cvScores = cross_val_score(pipe, X, y, cv=CV, scoring="r2")
     pipe.fit(X, y)
     return pipe, _evaluate(pipe, X, y, label, cvScores, features, startedAt)
 
 
+# 特徴量を追加したデータで、OneHot の前処理つきパイプラインを学習する共通の処理。
 def _feModel(model: Regressor, X: pd.DataFrame, y: Target, label: str) -> tuple[Pipeline, ModelMeta]:
     """特徴量エンジニアリング込みの OHE パイプラインで訓練する"""
+    # (名前, 部品) の組を順に並べる。"pre" で前処理し、その結果を "model" に渡す。
     pipe = Pipeline([("pre", makeOhePreprocessor(FE_NUM_FEATURES)), ("model", model)])
     return _cvAndFit(pipe, addFeatures(X), y, label, FE_FEATURES)
 
 
+# 追加の特徴量なし（職種・年齢・経験年数だけ）で学習する共通の処理。
 def _baseModel(model: Regressor, X: pd.DataFrame, y: Target, label: str) -> tuple[Pipeline, ModelMeta]:
     pipe = Pipeline([("pre", makeOhePreprocessor(BASE_NUM_FEATURES)), ("model", model)])
     return _cvAndFit(pipe, X, y, label, BASE_FEATURES)
@@ -111,6 +135,7 @@ def _baseModel(model: Regressor, X: pd.DataFrame, y: Target, label: str) -> tupl
 # ──────────────────────────────────────────────────────
 # sklearn モデル
 # ──────────────────────────────────────────────────────
+# 各 train〜 関数は、(学習済みのモデル, 精度情報) の組を返す。
 def trainRidge(X: pd.DataFrame, y: Target) -> tuple[Pipeline, ModelMeta]:
     # 意味: alpha = 予測を極端にしない抑えの強さ（正則化）。
     # 影響: 大きくすると予測がなだらかになり、職種ごとの年収の差が小さく出る。
@@ -172,9 +197,11 @@ def trainGradientBoosting(X: pd.DataFrame, y: Target) -> tuple[Pipeline, ModelMe
 # ──────────────────────────────────────────────────────
 # 勾配ブースティング系（追加ライブラリ）
 # ──────────────────────────────────────────────────────
+# LightGBM はパイプラインを使わず、ラッパークラスの中で職種を番号に変換する。
 def trainLightgbm(X: pd.DataFrame, y: Target) -> tuple[LGBMWrapper, ModelMeta]:
     startedAt = time.time()
     logger.info("  %s CV中...", f"{'LightGBM':<{LABEL_WIDTH}}")
+    # 既定のパラメータでラッパーを作る。
     wrapper = LGBMWrapper()
     cvScores = cross_val_score(wrapper, X, y, cv=CV, scoring="r2")
     wrapper.fit(X, y)
@@ -185,6 +212,7 @@ def trainCatboost(X: pd.DataFrame, y: Target) -> tuple[CatBoostWrapper, ModelMet
     """CV は軽量版で高速化し、最終モデルのみ高精度パラメータで訓練"""
     startedAt = time.time()
     logger.info("  %s CV中（%diter）...", f"{'CatBoost':<{LABEL_WIDTH}}", CATBOOST_CV_PARAMS["iterations"])
+    # **辞書 で、辞書のキーと値をキーワード引数として渡す（iterations=200, ... と書いたのと同じ）。
     cvScores = cross_val_score(CatBoostWrapper(**CATBOOST_CV_PARAMS), X, y, cv=CV, scoring="r2")
     logger.info("  %s CV完了(%.0fs) → 最終訓練(%diter)...", f"{'CatBoost':<{LABEL_WIDTH}}",
                 time.time() - startedAt, CATBOOST_FINAL_PARAMS["iterations"])
@@ -194,6 +222,7 @@ def trainCatboost(X: pd.DataFrame, y: Target) -> tuple[CatBoostWrapper, ModelMet
     return final, _evaluate(final, X, y, "CatBoost", cvScores, BASE_FEATURES, startedAt)
 
 
+# XGBoost も関数の中で import する（入っていない環境でもファイルを読み込めるようにするため）。
 def trainXgboost(X: pd.DataFrame, y: Target) -> tuple[Pipeline, ModelMeta]:
     import xgboost as xgb
     model = xgb.XGBRegressor(

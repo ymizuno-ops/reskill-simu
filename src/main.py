@@ -1,14 +1,20 @@
+# 型ヒントの新しい書き方を使えるようにする指定（詳しくは log_config.py）。
 from __future__ import annotations
 import os
+# sys: import の検索先（sys.path）を操作するために読み込む。
 import sys
 import json
+# pickle: 保存した Python のオブジェクト（学習済みモデル）を復元する標準モジュール。
 import pickle
 import warnings
 
 import pandas as pd
+# Streamlit: Python だけで Web 画面を作るライブラリ。
 import streamlit as st
 
+# ライブラリの警告を表示しない。
 warnings.filterwarnings("ignore")
+# このファイルのフォルダ（src/）を import の検索先の先頭に加える。streamlit run で起動しても、自作のモジュールを読み込めるようにするため。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # models.pkl の復元に必要（step3_train.py を直接実行して保存した場合、クラスは __main__ 側の名前で探される）
@@ -22,6 +28,7 @@ from ui.charts import plotMainPlotly, plotAllModelsPlotly
 from ui.guides import renderPreSimGuides, renderPostSimGuides
 from ui.results import renderAnalysisResults
 
+# このファイル用のロガー。
 logger = getLogger(__name__)
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # リポジトリのルート
@@ -48,6 +55,7 @@ _MODEL_LABEL_MAP = {
     "stacking": "Stacking",
 }
 
+# ページのタイトル・アイコン・レイアウトの設定。Streamlit の命令の中で最初に呼ぶ必要がある。
 st.set_page_config(
     # 意味: ブラウザのタブに出るアプリ名。
     page_title="リスキリングによる年収シミュレーター",
@@ -56,6 +64,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# 画面全体の見た目を調整する CSS（<style> タグ）を埋め込む。
 st.markdown(
     """
 <style>
@@ -88,11 +97,16 @@ st.markdown(
 )
 
 
+# @ はデコレーター（関数に機能を足す仕組み）。cache_resource で1回目の結果を覚えておき、画面を操作するたびに読み込み直さないようにする。
 @st.cache_resource(show_spinner="モデルを読み込み中...")
+# 戻り値は (モデル, 職種マスタ, 年齢カーブ, マクロ経済パラメータ) の4つ組。
 def loadAssets() -> tuple[ModelDict, pd.DataFrame, pd.DataFrame, MacroParams]:
     pklPath = os.path.join(MODEL_DIR, "models.pkl")
+    # 学習済みのモデルがまだなければ、Step1〜3 を実行してデータとモデルを作る。
     if not os.path.exists(pklPath):
+        # 処理の間、くるくる回る表示を出す。
         with st.spinner("初回起動: データ加工 & モデル訓練中（1〜2 分）"):
+            # 必要なときだけ import する。as で別名を付け、3つの main を区別する。
             from step1_to_processed import main as runStep1
             from step2_to_master import main as runStep2
             from step3_train import main as runStep3
@@ -101,6 +115,7 @@ def loadAssets() -> tuple[ModelDict, pd.DataFrame, pd.DataFrame, MacroParams]:
             runStep3()
 
     with open(pklPath, "rb") as f:
+        # 保存しておいたモデルの辞書を復元する。
         models = pickle.load(f)
 
     occList = pd.read_csv(os.path.join(MASTER_DIR, "occupation_list.csv"))
@@ -113,6 +128,7 @@ def loadAssets() -> tuple[ModelDict, pd.DataFrame, pd.DataFrame, MacroParams]:
 
 # 意味: 初回表示の注意事項ダイアログ。見出しはこの行の文字列、本文は下の関数の中の文字列を直接書き換えてよい。
 @st.dialog("⚠️ ご利用にあたっての注意事項")
+# 注意事項のダイアログ（画面の上に重なる小窓）の中身。
 def _showDisclaimer() -> None:
     st.markdown(
         """
@@ -137,11 +153,13 @@ def _showDisclaimer() -> None:
 - 本アプリは予告なく内容の変更・サービスの停止を行う場合があり、それに伴う損害についても開発者は責任を負いません。
 """
     )
+    # 押されたら、同意したことを session_state（画面の再実行をまたいで値を覚えておく場所）に記録し、rerun で画面を描き直す。
     if st.button("上記に同意して始める", type="primary", use_container_width=True):
         st.session_state["disclaimer_accepted"] = True
         st.rerun()
 
 
+# 入力値から simulate を呼ぶ共通の処理。
 def _simulate(models: ModelDict, modelKey: str, p: SidebarInputs,
               ageCurve: pd.DataFrame) -> tuple[list[float], list[float]]:
     return simulate(
@@ -155,6 +173,7 @@ def _simulate(models: ModelDict, modelKey: str, p: SidebarInputs,
     )
 
 
+# 全モデルで同じ条件のシミュレーションを行い、比較グラフ用の結果をまとめる。
 def _runAllModelSimulations(
     models: ModelDict, p: SidebarInputs, ageCurve: pd.DataFrame
 ) -> tuple[list[str], list[list[float]], list[list[float]], list[tuple[int | None, float]]]:
@@ -168,29 +187,36 @@ def _runAllModelSimulations(
     return modelKeys, sqAll, ccAll, roiAll
 
 
+# 画面全体の処理。Streamlit は画面を操作するたびに、このファイルを上から実行し直す。
 def main() -> None:
     st.title("📊 リスキリングによる年収シミュレーター")
 
+    # まだ同意していなければダイアログを出し、st.stop で以降の描画を止める。
     if not st.session_state.get("disclaimer_accepted", False):
         _showDisclaimer()
         st.stop()
 
     try:
         models, occList, ageCurve, macro = loadAssets()
+    # 読み込みに失敗したら、ログに詳細を残し、画面にもエラーを出して止める。
     except Exception as e:
         logger.exception("起動時のデータ・モデル読み込みに失敗した")
         st.error(f"起動エラー: {e}")
         st.stop()
 
+    # サイドバーを描画し、入力値を受け取る。
     inputs = renderSidebar(occList, models, macro)
+    # 実行ボタンが押されたときだけ入力値を保存する。その後に入力を変えても、ボタンを押すまで結果は変わらない。
     if inputs.isSubmitted:
         st.session_state["sim_params"] = inputs
 
+    # まだ一度も実行していなければ、案内とガイドだけを表示して終わる。
     if "sim_params" not in st.session_state:
         st.info("👈 サイドバーで条件を設定し、「シミュレーション実行」ボタンを押してください。")
         renderPreSimGuides(MODEL_DIR)
         return
 
+    # 最後に実行したときの入力値を取り出す。
     p: SidebarInputs = st.session_state["sim_params"]
     statusQuo, careerChange = _simulate(models, p.modelKey, p, ageCurve)
     modelKeys, sqAll, ccAll, roiAll = _runAllModelSimulations(models, p, ageCurve)
@@ -203,6 +229,7 @@ def main() -> None:
     )
 
     st.markdown("### 📈 年収推移グラフ")
+    # Plotly のグラフを表示する。use_container_width=True で横幅いっぱいに広げる。
     st.plotly_chart(
         plotMainPlotly(statusQuo, careerChange, p.currentAge, p.currentOcc, p.targetOcc, p.learningCost),
         use_container_width=True, theme="streamlit",
@@ -215,6 +242,7 @@ def main() -> None:
     )
 
     st.markdown("### 📊 年次詳細（選択モデル・5年刻み）")
+    # 内包表記で5年ごとの行を作り、表にして表示する。
     st.dataframe(
         pd.DataFrame([
             {
@@ -236,6 +264,7 @@ def main() -> None:
     )
 
     st.markdown("---")
+    # 小さな文字の注記を表示する。f文字列を並べて書くと、1つの文字列につながる。
     st.caption(
         f"📌 使用モデル: {p.modelLabel} ／ "
         f"GDP: {p.gdpGrowth:+.2f}% ／ CPI: {p.futureCpi} ／ "
@@ -245,5 +274,6 @@ def main() -> None:
     )
 
 
+# streamlit run main.py で起動したときも __name__ は "__main__" になるため、main() が実行される。
 if __name__ == "__main__":
     main()

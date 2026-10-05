@@ -1,7 +1,10 @@
+# 型ヒントの新しい書き方を使えるようにする指定（詳しくは log_config.py）。
 from __future__ import annotations
 import os
+# json: JSON ファイルを読むための標準モジュール。
 import json
 import pandas as pd
+# Streamlit: Python だけで Web 画面を作るライブラリ。
 import streamlit as st
 from model_types import ModelDict
 from simulation import predict, getOneStepDownIncome, MIN_FIRST_INCOME_RATIO
@@ -118,27 +121,37 @@ _SKILL_TRANSFER_LEVELS: list[tuple[int, str]] = [
     (80,  "かなりのスキルが転用できる"),
     (100, "即戦力（資格・経験が完全移行）"),
 ]
+# リスト内包表記で、タプルの一覧から表の行（辞書）を作る。辞書のキーが表の列名になる。
 _SKILL_TRANSFER_STATIC = [{"引継ぎ率": f"{rate}%", "目安": meaning} for rate, meaning in _SKILL_TRANSFER_LEVELS]
 
 
+# 引数の `*,` より後ろ（isExpanded）は、名前を付けて渡す必要がある（キーワード専用の引数）。
 def renderModelAccuracy(modelDir: str, *, isExpanded: bool) -> None:
+    # expander はクリックで開閉できる枠。
     with st.expander("🤖 モデル精度情報（クリックで展開）", expanded=isExpanded):
         metaPath = os.path.join(modelDir, "model_meta.json")
+        # 精度情報のファイルがあるときだけ、カードを表示する。
         if os.path.exists(metaPath):
             with open(metaPath, encoding="utf-8") as f:
+                # JSON ファイルを読み、辞書に変換する。
                 metaAll = json.load(f)
             items = list(metaAll.items())
             nCols = min(MAX_GRID_COLS, len(items))
+            # range の3つ目の引数は刻み。nCols 個ずつ区切って、1段ずつ並べる。
             for rowStart in range(0, len(items), nCols):
                 chunk = items[rowStart: rowStart + nCols]
+                # 列の入れ物とモデル情報を zip で組にし、1列に1枚のカードを置く。
                 for col, (_, m) in zip(st.columns(len(chunk)), chunk):
+                    # 枠線の付いた入れ物（カード）を作る。
                     with col.container(border=True):
                         st.markdown(f"**{m['label']}**")
+                        # metric は、大きな数字で値を見せる部品。
                         st.metric("R² Score", f"{m['r2_train']}")
                         st.caption(f"CV={m['r2_cv_mean']}±{m['r2_cv_std']} / MAE={m['mae_train']}万円")
 
         st.markdown("---")
         st.markdown("#### 📖 各モデルの特徴と使い分け")
+        # 3つ組のタプルを、3つの変数に分けて受け取る。
         for modelName, modelType, desc in MODEL_DESCRIPTIONS:
             clr = _TYPE_COLOR[modelType]
             lbl = _TYPE_LABEL[modelType]
@@ -153,13 +166,16 @@ def renderModelAccuracy(modelDir: str, *, isExpanded: bool) -> None:
             )
 
 
+# シミュレーション前に出す、目安だけの表。
 def renderSkillTransferStatic(*, isExpanded: bool) -> None:
     with st.expander("📊 スキル引継ぎ率ガイド", expanded=isExpanded):
         st.markdown("転職先でどの程度スキルが評価されるかを設定します。初年度年収の計算に使用されます。")
+        # 辞書のリストから表を作って表示する。hide_index=True で行番号を隠す。
         st.dataframe(pd.DataFrame(_SKILL_TRANSFER_STATIC), use_container_width=True, hide_index=True)
         st.caption("※ シミュレーション実行後は目標職種・年齢・年収をもとに実際の初年度年収も表示されます。")
 
 
+# シミュレーション後に出す表。引継ぎ率ごとに、初年度の年収を実際に計算して並べる。
 def renderSkillTransferTable(
     models: ModelDict,
     modelKey: str,
@@ -174,12 +190,15 @@ def renderSkillTransferTable(
 
     data = []
     for rate, meaning in _SKILL_TRANSFER_LEVELS:
+        # simulation.py の初年度の年収と同じ計算式。
         first = max(baseIncome + (expIncome - baseIncome) * (rate / PERCENT), baseIncome * MIN_FIRST_INCOME_RATIO)
         diff = first - currentIncome
+        # :.0f は小数点以下を表示しない書式。
         diffStr = f"▲ {abs(diff):.0f}万円" if diff < 0 else f"+{diff:.0f}万円"
         data.append({
             "引継ぎ率": f"{rate}%",
             "意味": meaning,
+            # 文字列[:n] で、先頭から n 文字だけを取り出す。
             f"初年度（現職→{targetOcc[:MAX_OCC_NAME_IN_HEADER]}）": f"{first:.0f}万円 ({diffStr})",
         })
 
@@ -190,6 +209,7 @@ def renderSkillTransferTable(
         st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
 
 
+# GDP と CPI のシナリオの表を、2列で並べる。
 def renderMacroGuide(*, isExpanded: bool) -> None:
     with st.expander("🌍 マクロ経済シナリオガイド（GDP・CPI）", expanded=isExpanded):
         st.markdown("将来の日本全体の名目賃金上昇率に影響を与えます。")
@@ -200,6 +220,7 @@ def renderMacroGuide(*, isExpanded: bool) -> None:
             st.dataframe(pd.DataFrame(_CPI_SCENARIOS), use_container_width=True, hide_index=True)
 
 
+# 昇給抑制とキャリアリスクのシナリオの表を、2列で並べる。
 def renderRiskGuide(*, isExpanded: bool) -> None:
     with st.expander("🛡️ リアリティ補正シナリオガイド（昇給抑制・キャリアリスク）", expanded=isExpanded):
         st.markdown("AIモデルが算出した「理想的な予測」に対して、現実的な下方修正を加えます。")
@@ -210,6 +231,7 @@ def renderRiskGuide(*, isExpanded: bool) -> None:
             st.dataframe(pd.DataFrame(_RISK_SCENARIOS), use_container_width=True, hide_index=True)
 
 
+# シミュレーション前は、ガイドをすべて開いた状態で表示する。
 def renderPreSimGuides(modelDir: str) -> None:
     renderModelAccuracy(modelDir, isExpanded=True)
     renderSkillTransferStatic(isExpanded=True)
@@ -217,6 +239,7 @@ def renderPreSimGuides(modelDir: str) -> None:
     renderRiskGuide(isExpanded=True)
 
 
+# シミュレーション後は、ガイドを閉じた状態で表示する（結果を見やすくするため）。
 def renderPostSimGuides(
     models: ModelDict,
     modelKey: str,

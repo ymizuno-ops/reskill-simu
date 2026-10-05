@@ -6,13 +6,21 @@ pickle で保存できるよう、すべてモジュールレベルで定義す�
 """
 
 from __future__ import annotations
+# copy: オブジェクトの複製を作る標準モジュール。
 import copy
+# os: フォルダの作成やパスの操作に使う。
 import os
+# pandas: 表形式のデータを扱うライブラリ。
 import pandas as pd
+# numpy: 数値計算のライブラリ（配列の連結など）。
 import numpy as np
+# scikit-learn（sklearn）: 機械学習のライブラリ。Ridge は正則化（予測が極端にならないよう抑える仕組み）付きの線形回帰。
 from sklearn.linear_model    import Ridge
+# LabelEncoder: 文字列のカテゴリ（職種名）を 0, 1, 2… の番号に変換する。
 from sklearn.preprocessing   import LabelEncoder
+# KFold: データを K 個に分け、順に1つを検証用にする分割の方法。
 from sklearn.model_selection import KFold
+# 自作のモデルを sklearn の部品として扱えるようにするための親クラス。
 from sklearn.base            import BaseEstimator, RegressorMixin
 
 from log_config import getLogger
@@ -20,6 +28,7 @@ from model_types import ModelDict, Regressor, Target
 
 logger = getLogger(__name__)
 
+# このファイルがあるフォルダ（src/）のパス。
 _HERE = os.path.dirname(os.path.abspath(__file__))
 # 意味: CatBoost が学習中の作業ファイルを書き出すフォルダ。
 # 影響: 学習結果には影響しない。注意: Git の管理外のフォルダで、なければ学習時に自動で作る。
@@ -45,11 +54,17 @@ UNKNOWN_CATEGORY_INDEX = 0  # LightGBM: 未知の職種は先頭クラスとし�
 # ──────────────────────────────────────────────────────
 # 共通前処理
 # ──────────────────────────────────────────────────────
+# 年齢と経験年数から、追加の特徴量（予測の手がかりになる列）を4つ作る。
 def addFeatures(X: pd.DataFrame) -> pd.DataFrame:
+    # 元の表を書き換えないよう、コピーに列を足す。
     xc = X.copy()
+    # 年齢の2乗。年収が年齢とともに伸びて頭打ちになる「曲がり」を、線形モデルでも表せるようにする。
     xc["age_sq"]         = xc["age"] ** 2 / AGE_SQ_SCALE
+    # 年齢 × 経験年数。「同じ年齢でも経験が長いほど高い」といった組み合わせの効果を表す。
     xc["age_x_exp"]      = xc["age"] * xc["experience_years"] / AGE_X_EXP_SCALE
+    # 年齢に対する経験年数の割合。clip(lower=1) で 0 で割るのを防ぐ。
     xc["exp_ratio"]      = xc["experience_years"] / xc["age"].clip(lower=1)
+    # ピーク帯の年齢なら 1.0、そうでなければ 0.0。astype(float) で True/False を数値に変換する。
     xc["prime_age_flag"] = ((xc["age"] >= PRIME_AGE_FROM) & (xc["age"] <= PRIME_AGE_TO)).astype(float)
     return xc
 
@@ -58,11 +73,13 @@ def addFeatures(X: pd.DataFrame) -> pd.DataFrame:
 # Wrapper クラス（モジュールレベル定義 ← pickle保存に必須）
 # ══════════════════════════════════════════════════════
 
+# 「class 名前(親クラス, ...)」で継承する。親クラスの機能（パラメータの取得や精度の計算など）を引き継ぐ。
 class LGBMWrapper(BaseEstimator, RegressorMixin):
     """
     LightGBM の sklearn 互換ラッパー。
     occupation を LabelEncoding してカテゴリ特徴として渡す。
     """
+    # __init__ はオブジェクトを作るときに呼ばれる初期化の処理（コンストラクタ）。self は作られるオブジェクト自身。
     def __init__(self,
                  # 意味: LightGBM の学習設定の既定値。n_estimators = 木の数、learning_rate = 1本ごとの学習の歩幅、num_leaves = 1本の木の分かれ目の多さ。
                  # 影響: 木の数・分かれ目を増やすと細かく学習するが、学習時間が延び、過学習（訓練データに合わせすぎて新しい条件で外れる）しやすくなる。
@@ -70,6 +87,7 @@ class LGBMWrapper(BaseEstimator, RegressorMixin):
                  n_estimators: int = 500, learning_rate: float = 0.05, num_leaves: int = 63,
                  min_child_samples: int = 10, subsample: float = 0.8, colsample_bytree: float = 0.8,
                  reg_alpha: float = 0.1, reg_lambda: float = 1.0, random_state: int = RANDOM_STATE) -> None:
+        # 引数を同じ名前の属性に保存する。sklearn は、この名前の一致を前提にモデルを複製する（交差検証などで使う）。
         self.n_estimators    = n_estimators
         self.learning_rate   = learning_rate
         self.num_leaves      = num_leaves
@@ -80,11 +98,16 @@ class LGBMWrapper(BaseEstimator, RegressorMixin):
         self.reg_lambda      = reg_lambda
         self.random_state    = random_state
 
+    # 学習するメソッド。最後に self を返すのが sklearn の決まり（model.fit(...).predict(...) とつなげて書ける）。
     def fit(self, X: pd.DataFrame, y: Target) -> "LGBMWrapper":
+        # 関数の中で import している。LightGBM が入っていない環境でも、このファイル自体は読み込めるようにするため。
         import lightgbm as lgb
+        # 名前の末尾が _ の属性は「学習で作られたもの」を表す sklearn の慣習。
         self.le_ = LabelEncoder()
         xc = X.copy()
+        # fit_transform は、職種名の一覧を覚える（fit）ことと、番号に変換する（transform）ことを同時に行う。
         xc["occupation"] = self.le_.fit_transform(xc["occupation"].astype(str))
+        # LightGBM の回帰モデルを、保存しておいたパラメータで作る。
         self.model_ = lgb.LGBMRegressor(
             n_estimators=self.n_estimators,
             learning_rate=self.learning_rate,
@@ -95,21 +118,28 @@ class LGBMWrapper(BaseEstimator, RegressorMixin):
             reg_alpha=self.reg_alpha,
             reg_lambda=self.reg_lambda,
             random_state=self.random_state,
+            # -1 は CPU のコアをすべて使う指定。
             n_jobs=-1,
+            # 学習中のメッセージを出さない。
             verbose=-1,
         )
+        # 0 列目（職種の番号）をカテゴリとして扱うよう指定する。番号の大小に意味がないことを LightGBM に伝える。
         self.model_.fit(xc, y, categorical_feature=[0])
         return self
 
+    # 予測するメソッド。予測値の配列を返す。
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         xc = X.copy()
+        # classes_ は学習時に見た職種名の一覧。set にすると「含まれるか」を速く調べられる。
         known = set(self.le_.classes_)
         fallback = self.le_.classes_[UNKNOWN_CATEGORY_INDEX]
+        # apply で各値に関数を適用する。lambda は名前のない短い関数。学習していない職種は fallback に置き換える（LabelEncoder は知らない値を変換できないため）。
         xc["occupation"] = xc["occupation"].apply(lambda v: v if v in known else fallback)
         xc["occupation"] = self.le_.transform(xc["occupation"].astype(str))
         return self.model_.predict(xc)
 
 
+# CatBoost 用の、同じ形のラッパー（包んで使い方をそろえるクラス）。
 class CatBoostWrapper(BaseEstimator, RegressorMixin):
     """
     CatBoost の sklearn 互換ラッパー。
@@ -129,6 +159,7 @@ class CatBoostWrapper(BaseEstimator, RegressorMixin):
         self.random_state     = random_state
 
     def fit(self, X: pd.DataFrame, y: Target) -> "CatBoostWrapper":
+        # LightGBM と同じ理由で、関数の中で import する。
         from catboost import CatBoostRegressor
         os.makedirs(CATBOOST_TRAIN_DIR, exist_ok=True)  # tmp/ が無いと CatBoost が作れず失敗する
         self.model_ = CatBoostRegressor(
@@ -142,6 +173,7 @@ class CatBoostWrapper(BaseEstimator, RegressorMixin):
             thread_count=-1,
             train_dir=CATBOOST_TRAIN_DIR,
         )
+        # CatBoost は職種名を文字列のままカテゴリとして扱えるため、番号への変換が要らない。
         self.model_.fit(X, y, cat_features=["occupation"])
         return self
 
@@ -152,6 +184,7 @@ class CatBoostWrapper(BaseEstimator, RegressorMixin):
 # ══════════════════════════════════════════════════════
 # Stacking Ensemble
 # ══════════════════════════════════════════════════════
+# 複数のモデルの予測を、さらに別のモデル（Ridge）で組み合わせるアンサンブル（複数モデルの組み合わせ）。
 class StackingEnsemble(BaseEstimator, RegressorMixin):
     """
     全ベースモデルのOOF（Out-of-Fold）予測をメタ特徴量として
@@ -169,6 +202,7 @@ class StackingEnsemble(BaseEstimator, RegressorMixin):
 
     # 意味: 予測の前に追加の項目（年齢² など）を計算して渡すモデルの一覧。
     # 注意: simulation.py の _FE_MODELS と同じ内容にする。ずれると予測時にエラーになるか、誤った予測になる。
+    # frozenset は変更できない集合。クラスの中に直接書いた変数は、すべてのオブジェクトで共有されるクラス変数になる。
     FE_KEYS = frozenset({"custom", "xgboost", "elasticnet", "gradient_boosting"})
 
     # 意味: n_splits = 各モデルの予測を作るときのデータの分割数、meta_alpha = 各モデルの予測を混ぜる Ridge の抑えの強さ。
@@ -188,46 +222,59 @@ class StackingEnsemble(BaseEstimator, RegressorMixin):
         self.meta_alpha  = meta_alpha
 
     # ── 内部メソッド ──────────────────────────────
+    # キーが FE_KEYS にあれば特徴量を追加し、なければコピーをそのまま返す。
     def _prepareX(self, X: pd.DataFrame, key: str) -> pd.DataFrame:
         """モデルキーに応じて特徴量エンジニアリングを適用"""
         return addFeatures(X) if key in self.FE_KEYS else X.copy()
 
+    # deepcopy で中身まで丸ごと複製してから学習する。元のモデル（base_models）を書き換えないため。
     def _fitClone(self, key: str, X: pd.DataFrame, y: np.ndarray) -> Regressor:
         """ベースモデルをディープコピーして訓練する（元のモデルは変えない）"""
         cloned = copy.deepcopy(self.base_models[key]["pipeline"])
         cloned.fit(self._prepareX(X, key), y)
         return cloned
 
+    # OOF（Out-of-Fold）予測: 学習に使わなかった部分のデータに対する予測。メタモデルが「学習データを丸暗記した予測」に引きずられないようにするために使う。
     def _makeOofMatrix(self, X: pd.DataFrame, y: np.ndarray) -> np.ndarray:
         """
         全ベースモデルのOOF予測行列を作成する。
         shape: (n_samples, n_base_models)
         """
         modelKeys = list(self.base_models.keys())
+        # 行 = データの件数、列 = モデルの数 の、0 で埋めた行列を用意する。
         oofMatrix = np.zeros((len(y), len(modelKeys)))
+        # shuffle=True で並び順を混ぜてから分割する。
         kf        = KFold(n_splits=self.n_splits, shuffle=True, random_state=RANDOM_STATE)
 
+        # 分割ごとに、学習用の行番号と検証用の行番号の組が返る。
         for trainIdx, valIdx in kf.split(X):
+            # 行番号のリストで行を取り出し、行番号を振り直す。
             xTrain = X.iloc[trainIdx].reset_index(drop=True)
             xVal   = X.iloc[valIdx].reset_index(drop=True)
 
             for colIdx, key in enumerate(modelKeys):
                 # モデルのディープコピーを fold ごとに再訓練
                 cloned = self._fitClone(key, xTrain, y[trainIdx])
+                # 行列の [行, 列] の位置に、検証用の行の予測値をまとめて書き込む。
                 oofMatrix[valIdx, colIdx] = cloned.predict(self._prepareX(xVal, key))
 
         return oofMatrix
 
+    # メタモデルに渡す入力 = 各モデルの予測値 + 年齢 + 経験年数。
     def _makeMetaX(self, oofOrPred: np.ndarray, X: pd.DataFrame) -> np.ndarray:
         """
         メタ特徴量 = ベースモデル予測値 + age + experience_years
         age/experience_years を追加することで「年齢帯の系統誤差」を補正できる
         """
+        # .values で DataFrame を numpy の配列に変換する。
         structural = X[["age", "experience_years"]].values
+        # hstack は配列を横（列の方向）につなげる。
         return np.hstack([oofOrPred, structural])
 
     # ── 公開メソッド ──────────────────────────────
+    # 1. OOF 予測を作る → 2. 各モデルを全データで学習し直す → 3. メタモデルを学習する、の順に進む。
     def fit(self, X: pd.DataFrame, y: Target) -> "StackingEnsemble":
+        # Series でも配列でも numpy の配列にそろえる（行番号のリストで取り出せるようにするため）。
         yArr = np.asarray(y)
         modelKeys = list(self.base_models.keys())
 
@@ -238,9 +285,11 @@ class StackingEnsemble(BaseEstimator, RegressorMixin):
 
         # Layer1: 全データでベースモデルを再訓練（最終予測用）
         # 属性名は sklearn の規約（末尾 _）と models.pkl の互換のため変えない
+        # 辞書内包表記: {キー: 値 for ... in ...} で辞書を1行で作る。
         self.fitted_bases_ = {key: self._fitClone(key, X, yArr) for key in modelKeys}
 
         # Layer2: メタモデルを訓練
+        # メタモデル（各モデルの予測を組み合わせるモデル）。
         self.meta_model_ = Ridge(alpha=self.meta_alpha)
         self.meta_model_.fit(self._makeMetaX(oofMatrix, X), yArr)
         self.model_keys_ = modelKeys
@@ -248,6 +297,7 @@ class StackingEnsemble(BaseEstimator, RegressorMixin):
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         # 各ベースモデルの予測を並べる
+        # 各モデルの予測を列として並べる。[... for key in ...] はリスト内包表記（for を角括弧の中に書いてリストを作る形）。
         basePreds = np.column_stack([
             self.fitted_bases_[key].predict(self._prepareX(X, key))
             for key in self.model_keys_

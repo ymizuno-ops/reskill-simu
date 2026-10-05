@@ -21,19 +21,18 @@
 --------------------------------------------------------------------------------
 
 reskill-simu/
-├── main.py                          # Streamlit エントリーポイント
-├── occupation.py                   # 職種カテゴリデータ・正規化ロジック
-├── simulation.py                   # 予測・シミュレーション・ROI計算
 ├── requirements.txt                # 依存ライブラリ一覧
 ├── README.md                       # このファイル
 │
-├── ui/                             # Streamlit UI コンポーネント
-│   ├── charts.py                   # Plotly グラフ生成
-│   ├── guides.py                   # ガイドエキスパンダー
-│   ├── results.py                  # 分析結果レンダリング
-│   └── sidebar.py                  # サイドバー UI
-│
-├── src/                            # データ処理・学習スクリプト
+├── src/                            # アプリ本体・データ処理・学習スクリプト
+│   ├── main.py                     # Streamlit エントリーポイント
+│   ├── occupation.py               # 職種カテゴリデータ・正規化ロジック
+│   ├── simulation.py               # 予測・シミュレーション・ROI計算
+│   ├── ui/                         # Streamlit UI コンポーネント
+│   │   ├── charts.py               # Plotly グラフ生成
+│   │   ├── guides.py               # ガイドエキスパンダー
+│   │   ├── results.py              # 分析結果レンダリング
+│   │   └── sidebar.py              # サイドバー UI
 │   ├── step1_to_processed.py       # Step1: raw → processed（xlsx/csv 解析）
 │   ├── step2_to_master.py          # Step2: processed → master（ML用データ構築）
 │   └── step3_train.py              # Step3: モデル訓練・保存
@@ -107,9 +106,8 @@ Step 0  GitHub からファイルを取得
     ls -la
 
     確認すべき項目:
-      main.py               ← Streamlit アプリ本体
       requirements.txt     ← 依存ライブラリ一覧
-      src/                 ← データ処理・訓練スクリプト
+      src/                 ← アプリ本体（main.py）・データ処理・訓練スクリプト
       data/raw/            ← e-stat データの配置先（中身は空）
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -309,7 +307,7 @@ Step 5  モデル訓練（初回のみ）
 Step 6  アプリの起動
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    streamlit run main.py
+    streamlit run src/main.py
 
     # 自動でブラウザが開きます。開かない場合は以下の URL にアクセスしてください。
     # http://localhost:8501
@@ -325,8 +323,8 @@ Step 6  アプリの起動
 
   ■ よくあるエラー
     起動エラー: Can't get attribute 'LGBMWrapper'
-    → main.py が古いバージョンです。最新版に差し替えてください。
-      （main.py の先頭付近に from step3_train import LGBMWrapper が必要です）
+    → src/main.py が古いバージョンです。最新版に差し替えてください。
+      （src/main.py の先頭付近に from step3_train import LGBMWrapper が必要です）
 
     起動エラー: models.pkl が見つかりません
     → Step 5 のモデル訓練が完了していません。
@@ -349,7 +347,7 @@ Step 6  アプリの起動
     python src/step2_to_master.py
     python src/step3_train.py
 
-    ④ streamlit run main.py でアプリを起動して結果を確認
+    ④ streamlit run src/main.py でアプリを起動して結果を確認
 
 
 --------------------------------------------------------------------------------

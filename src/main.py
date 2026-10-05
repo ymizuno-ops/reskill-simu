@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 warnings.filterwarnings("ignore")
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from step3_train import LGBMWrapper, CatBoostWrapper, StackingEnsemble  # noqa: F401
@@ -22,7 +22,7 @@ from ui.charts import plot_main_plotly, plot_all_models_plotly
 from ui.guides import render_pre_sim_guides, render_post_sim_guides
 from ui.results import render_analysis_results
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
+_HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # リポジトリのルート
 MASTER_DIR = os.path.join(_HERE, "data", "master")
 MODEL_DIR = os.path.join(_HERE, "models")
 AGE_ALL_PATH = os.path.join(_HERE, "data", "processed", "age_wage_all.csv")

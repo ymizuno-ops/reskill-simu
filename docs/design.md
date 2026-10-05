@@ -6,15 +6,15 @@
 
 ```
 reskill-simu/
-├── main.py                      # エントリポイント・CSS・アセット読み込み・main()
-├── occupation.py                # 職種カテゴリ定数・正規化・カテゴリ振り分け
-├── simulation.py                # 予測・シミュレーション・ROI計算
-├── ui/
-│   ├── charts.py               # Plotly グラフ描画
-│   ├── guides.py               # ガイド系 expander（モデル説明・シナリオ等）
-│   ├── results.py              # 分析結果5ブロックの描画
-│   └── sidebar.py              # サイドバー UI・パラメータ取得
 ├── src/
+│   ├── main.py                  # エントリポイント・CSS・アセット読み込み・main()
+│   ├── occupation.py            # 職種カテゴリ定数・正規化・カテゴリ振り分け
+│   ├── simulation.py            # 予測・シミュレーション・ROI計算
+│   ├── ui/
+│   │   ├── charts.py           # Plotly グラフ描画
+│   │   ├── guides.py           # ガイド系 expander（モデル説明・シナリオ等）
+│   │   ├── results.py          # 分析結果5ブロックの描画
+│   │   └── sidebar.py          # サイドバー UI・パラメータ取得
 │   ├── step1_to_processed.py   # データ変換（raw → processed）
 │   ├── step2_to_master.py      # データ構築（processed → master）
 │   └── step3_train.py          # モデル訓練・保存

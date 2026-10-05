@@ -4,3 +4,7 @@
 - main.py・simulation.py・occupation.py・ui/ を src/ へ移動。main.py のパス基準を修正し、起動コマンドを streamlit run src/main.py に変更
 - README.md・docs/design.md のディレクトリ構成と起動コマンドを更新
 - CLAUDE.md の「ディレクトリの例外」に models/ を追記
+
+## 2026-10-05 23:27 (chore/remove-unused-files)
+- 使われていないファイルを削除: .ai/Instructions.md・Memory.md・CodingStandards.md、.claude/skills/review・test、docs/tasks.md
+- 削除する Memory.md の Todo を README.md の「今後の課題」へ移した

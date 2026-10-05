@@ -21,14 +21,24 @@ from model_types import ModelDict, Regressor, Target
 logger = getLogger(__name__)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+# 意味: CatBoost が学習中の作業ファイルを書き出すフォルダ。
+# 影響: 学習結果には影響しない。注意: Git の管理外のフォルダで、なければ学習時に自動で作る。
 CATBOOST_TRAIN_DIR = os.path.join(_HERE, "..", "tmp", "catboost_info")
+# 意味: 学習に使う乱数の種。全モデルと、精度評価のデータの分け方で共通に使う。
+# 影響: 同じ値なら再実行しても同じ結果になる。変えると精度の数値と予測年収がわずかに変わる。
 RANDOM_STATE = 42
 
 # 特徴量エンジニアリングの係数
+# 意味: 年齢² と 年齢 × 経験年数 を割る数。数値の桁を他の項目にそろえるためのもの。
+# 影響: 学習時に数値の大きさをそろえるため、予測結果はほぼ変わらない。注意: 変えたら step3 で学習し直す（古い models.pkl と合わなくなる）。
 AGE_SQ_SCALE      = 1000   # age² を他の特徴量と同程度の桁にそろえる
 AGE_X_EXP_SCALE   = 100
+# 意味: 給与がピークになりやすい年齢帯（35〜54歳）。この年齢帯に「ピーク帯」の印を付けて学習する。
+# 影響: 範囲を変えると、特徴量強化型のモデルが描く年収カーブの山の位置が変わる。注意: 変えたら step3 で学習し直す。
 PRIME_AGE_FROM    = 35     # 給与ピーク帯
 PRIME_AGE_TO      = 54
+# 意味: LightGBM が学習していない職種を予測するとき、代わりに使う職種（学習した職種名の並び順で先頭）。
+# 影響: 変えると、学習データにない職種を選んだときの LightGBM の予測年収が変わる。
 UNKNOWN_CATEGORY_INDEX = 0  # LightGBM: 未知の職種は先頭クラスとして扱う
 
 
@@ -54,6 +64,9 @@ class LGBMWrapper(BaseEstimator, RegressorMixin):
     occupation を LabelEncoding してカテゴリ特徴として渡す。
     """
     def __init__(self,
+                 # 意味: LightGBM の学習設定の既定値。n_estimators = 木の数、learning_rate = 1本ごとの学習の歩幅、num_leaves = 1本の木の分かれ目の多さ。
+                 # 影響: 木の数・分かれ目を増やすと細かく学習するが、学習時間が延び、過学習（訓練データに合わせすぎて新しい条件で外れる）しやすくなる。
+                 # 注意: 変えたら step3 を実行し、ログの CV（交差検証 = データを分けて当てられるか試した精度）が下がっていないか確かめる。
                  n_estimators: int = 500, learning_rate: float = 0.05, num_leaves: int = 63,
                  min_child_samples: int = 10, subsample: float = 0.8, colsample_bytree: float = 0.8,
                  reg_alpha: float = 0.1, reg_lambda: float = 1.0, random_state: int = RANDOM_STATE) -> None:
@@ -103,6 +116,8 @@ class CatBoostWrapper(BaseEstimator, RegressorMixin):
     occupation を文字列のまま cat_features に指定できる。
     """
     def __init__(self,
+                 # 意味: CatBoost の学習設定の既定値。iterations = 木の数、depth = 木の深さ、l2_leaf_reg = 予測を極端にしない抑えの強さ。
+                 # 影響: 木の数・深さを増やすと細かく学習するが、学習時間が延び、過学習しやすくなる。注意: 実際の値は step3_models.py の CATBOOST_*_PARAMS で上書きしている。
                  iterations: int = 500, learning_rate: float = 0.05, depth: int = 8,
                  l2_leaf_reg: float = 3.0, min_data_in_leaf: int = 10,
                  random_state: int = RANDOM_STATE) -> None:
@@ -152,8 +167,12 @@ class StackingEnsemble(BaseEstimator, RegressorMixin):
     FE_KEYS に含まれるモデルは predict 前に addFeatures を適用する。
     """
 
+    # 意味: 予測の前に追加の項目（年齢² など）を計算して渡すモデルの一覧。
+    # 注意: simulation.py の _FE_MODELS と同じ内容にする。ずれると予測時にエラーになるか、誤った予測になる。
     FE_KEYS = frozenset({"custom", "xgboost", "elasticnet", "gradient_boosting"})
 
+    # 意味: n_splits = 各モデルの予測を作るときのデータの分割数、meta_alpha = 各モデルの予測を混ぜる Ridge の抑えの強さ。
+    # 影響: n_splits を増やすと学習時間がほぼ比例して延びる。meta_alpha を大きくすると特定のモデルに偏らず均等寄りに混ぜる。
     def __init__(self, base_models: ModelDict, n_splits: int = 5, meta_alpha: float = 1.0) -> None:
         """
         Parameters

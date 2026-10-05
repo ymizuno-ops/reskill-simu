@@ -1,6 +1,9 @@
 from __future__ import annotations
 import unicodedata as _ud
 
+# 意味: 画面の「大分類」と、それに含まれる職種名の対応表。
+# 影響: 職種を別の大分類へ移すと、画面で大分類を選んだときに出る職種が変わる。
+# 注意: 職種名は統計の表記に合わせる（全角・半角やスペースの違いは自動で吸収する）。どこにも載っていない職種は OTHER_CATEGORY に入る。
 OCCUPATION_CATEGORIES: dict[str, list[str]] = {
     "管理職": ["管理的職業従事者", "男管理的職業従事者", "女管理的職業従事者"],
     "専門職・技術職（IT・理工系）": [
@@ -173,6 +176,7 @@ OCCUPATION_CATEGORIES: dict[str, list[str]] = {
     ],
 }
 
+# 意味: 上の対応表に載っていない職種を入れる大分類の名前。
 OTHER_CATEGORY = "その他"
 
 _OCC_TO_CATEGORY: dict[str, str] = {

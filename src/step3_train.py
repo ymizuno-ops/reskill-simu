@@ -29,18 +29,33 @@ warnings.filterwarnings("ignore")
 logger = getLogger(__name__)
 
 _HERE      = os.path.dirname(os.path.abspath(__file__))
+# 意味: 学習データ（ml_dataset.csv）を読み込む場所。
+# 注意: step2_to_master.py の OUT_DIR と同じ場所にする。
 MASTER_DIR = os.path.join(_HERE, "..", "data", "master")
+# 意味: 学習済みモデル（models.pkl）と精度情報（model_meta.json）の保存先。
+# 注意: main.py の MODEL_DIR と同じ場所にする（画面がここを読む）。
 MODEL_DIR  = os.path.join(_HERE, "..", "models")
 os.makedirs(MODEL_DIR, exist_ok=True)
 
+# 意味: インストールされていれば使う追加ライブラリ。
+# 影響: インストールされていないライブラリのモデルは学習を飛ばし、画面のモデル選択肢からも消える。
+# 注意: 名前は BOOSTING_MODELS の左端のキーと一致させる。
 OPTIONAL_LIBS = ["lightgbm", "catboost", "xgboost"]
+# 意味: Stacking の精度評価（評価の中でさらに分割するネストCV）の内側の分割数。
+# 影響: 増やすと評価の時間が大きく延びる（今の設定でも5〜15分かかる）。
 STACKING_INNER_SPLITS = 4     # ネストCVの内側の fold 数
+# 意味: 各モデルの予測を混ぜる Ridge の抑えの強さ（正則化）。
+# 影響: 大きくすると特定のモデルに偏らず、均等寄りに混ぜる。
 STACKING_META_ALPHA   = 1.0
+# 意味: 実行ログの精度ランキングに出す棒（█）の最大の長さ。見た目だけで結果は変わらない。
 RANKING_BAR_WIDTH     = 20    # 精度ランキングの棒の長さ（R²=1.0 のとき）
 SECTION_RULE_WIDTH    = 65
 
 Trainer = Callable[[pd.DataFrame, Target], tuple[Regressor, ModelMeta]]
 
+# 意味: 常に学習するモデルの一覧。表示名と説明は model_meta.json に保存され、画面の精度カードに出る。
+# 影響: 表示名・説明を書き換えて step3 を実行し直すと、画面の表示が変わる。
+# 注意: 左端のキー（"ridge" など）は画面・シミュレーションと共通の名前なので変えない。
 # (キー, 訓練関数, 表示名, 説明, FE の要否)
 SKLEARN_MODELS: list[tuple[str, Trainer, str, str, bool]] = [
     ("ridge", trainRidge, "Ridge Regression（安定型）",
@@ -54,6 +69,7 @@ SKLEARN_MODELS: list[tuple[str, Trainer, str, str, bool]] = [
     ("gradient_boosting", trainGradientBoosting, "Gradient Boosting（sklearn標準）",
      "追加インストール不要の勾配ブースティング。安定性と精度のバランスが良い。", True),
 ]
+# 意味: 追加ライブラリがあるときだけ学習するモデルの一覧。表示名・説明の扱いは上の一覧と同じ。
 # (キー = ライブラリ名, 訓練関数, 表示名, 説明, FE の要否, ログ用の名前)
 BOOSTING_MODELS: list[tuple[str, Trainer, str, str, bool, str]] = [
     ("lightgbm", trainLightgbm, "LightGBM（高速ブースティング）",

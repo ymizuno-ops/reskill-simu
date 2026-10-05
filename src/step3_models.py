@@ -23,20 +23,34 @@ from model_wrappers import addFeatures, LGBMWrapper, CatBoostWrapper, RANDOM_STA
 
 logger = getLogger(__name__)
 
+# 意味: 精度評価（交差検証 = データを分けて、学習に使っていない部分を当てられるか試す方法）の分割数。
+# 影響: 増やすと精度の数値が安定するが、学習時間が延びる。画面の精度カードの CV の値が変わる。
 CV_FOLDS = 5
 CV = KFold(n_splits=CV_FOLDS, shuffle=True, random_state=RANDOM_STATE)
+# 意味: 学習に使う CPU コアの数（-1 = すべて使う）。
+# 影響: 速さだけが変わり、結果は変わらない。他の作業が重くなる場合は 2 などに減らす。
 ALL_CORES = -1
+# 意味: 実行ログでモデル名を表示する幅（文字数）。見た目だけで結果は変わらない。
 LABEL_WIDTH = 32
+# 意味: model_meta.json と画面の精度カードに出す数値の小数点以下の桁数（R² と MAE）。
 METRIC_DIGITS = 4
 MAE_DIGITS = 2
 
+# 意味: 予測に使う入力項目（職種・年齢・経験年数）。
+# 注意: 学習データの CSV の列名そのもの。変えるとデータ・画面と合わなくなるので変えない。
 BASE_FEATURES = ["occupation", "age", "experience_years"]
 BASE_NUM_FEATURES = ["age", "experience_years"]
+# 意味: 特徴量強化型のモデルが使う数値の項目（年齢² など、addFeatures が作る列を含む）。
+# 注意: model_wrappers.py の addFeatures が作る列名と一致させる。
 FE_NUM_FEATURES = ["age", "experience_years", "age_sq", "age_x_exp", "exp_ratio", "prime_age_flag"]
 FE_FEATURES = ["occupation", *FE_NUM_FEATURES]
 
 # CatBoost: CV は軽量版で高速化し、最終モデルのみ高精度で訓練する
+# 意味: CatBoost の精度評価に使う軽い設定（木の数を減らして時間を短くする）。
+# 影響: iterations を増やすと評価が正確になるが、学習時間が延びる。画面の予測には使わない。
 CATBOOST_CV_PARAMS    = {"iterations": 200, "learning_rate": 0.1, "depth": 6}
+# 意味: 画面の予測に使う CatBoost の最終モデルの設定。
+# 影響: iterations・depth を増やすと細かく学習するが、時間が延び、過学習しやすくなる。
 CATBOOST_FINAL_PARAMS = {"iterations": 500, "learning_rate": 0.05, "depth": 8}
 
 
@@ -98,11 +112,15 @@ def _baseModel(model: Regressor, X: pd.DataFrame, y: Target, label: str) -> tupl
 # sklearn モデル
 # ──────────────────────────────────────────────────────
 def trainRidge(X: pd.DataFrame, y: Target) -> tuple[Pipeline, ModelMeta]:
+    # 意味: alpha = 予測を極端にしない抑えの強さ（正則化）。
+    # 影響: 大きくすると予測がなだらかになり、職種ごとの年収の差が小さく出る。
     return _baseModel(Ridge(alpha=10.0), X, y, "Ridge Regression")
 
 
 def trainRandomForest(X: pd.DataFrame, y: Target) -> tuple[Pipeline, ModelMeta]:
     model = RandomForestRegressor(
+        # 意味: n_estimators = 木の数、max_depth = 木の深さ、min_samples_leaf = 1つの枝に必要な最少のデータ件数。
+        # 影響: 木を深く・最少件数を小さくすると訓練データに細かく合わせ、新しい条件で外れやすくなる。木を増やすと安定するが遅くなる。
         n_estimators=200, max_depth=12,
         min_samples_leaf=3, max_features="sqrt",
         random_state=RANDOM_STATE, n_jobs=ALL_CORES,
@@ -111,6 +129,8 @@ def trainRandomForest(X: pd.DataFrame, y: Target) -> tuple[Pipeline, ModelMeta]:
 
 
 def trainCustomRidge(X: pd.DataFrame, y: Target) -> tuple[Pipeline, ModelMeta]:
+    # 意味: alpha = 予測を極端にしない抑えの強さ（正則化）。
+    # 影響: 大きくすると予測がなだらかになり、年齢カーブの曲がり方が弱く出る。
     return _feModel(Ridge(alpha=1.0), X, y, "Custom Ridge (+FE)")
 
 
@@ -121,6 +141,7 @@ def trainElasticnet(X: pd.DataFrame, y: Target) -> tuple[Pipeline, ModelMeta]:
     特徴量エンジニアリング込みで使用する。
     """
     model = ElasticNet(
+        # 影響: alpha を大きくすると、効き目の小さい項目の重みが 0 になりやすく、予測が単純になる。
         alpha=0.001,     # 正則化強度（チューニング済み）
         l1_ratio=0.7,    # L1:L2 = 70:30（Lasso寄り・スパース性重視）
         max_iter=5000,
@@ -136,6 +157,8 @@ def trainGradientBoosting(X: pd.DataFrame, y: Target) -> tuple[Pipeline, ModelMe
     特徴量エンジニアリング込みで使用する。
     """
     model = GradientBoostingRegressor(
+        # 意味: n_estimators = 木の数、learning_rate = 1本ごとの学習の歩幅、max_depth = 木の深さ、subsample = 木ごとに使うデータの割合。
+        # 影響: 歩幅を下げて木を増やすと精度が上がりやすいが遅くなる。木を深くすると過学習しやすくなる。
         n_estimators=300,
         learning_rate=0.05,
         max_depth=5,
@@ -174,6 +197,8 @@ def trainCatboost(X: pd.DataFrame, y: Target) -> tuple[CatBoostWrapper, ModelMet
 def trainXgboost(X: pd.DataFrame, y: Target) -> tuple[Pipeline, ModelMeta]:
     import xgboost as xgb
     model = xgb.XGBRegressor(
+        # 意味: 木の数・歩幅・深さは GradientBoosting と同じ意味。reg_alpha / reg_lambda = 予測を極端にしない抑えの強さ、colsample_bytree = 木ごとに使う項目の割合。
+        # 影響: 抑えを強くすると過学習しにくくなるが、細かな差を捉えにくくなる。
         n_estimators=500,
         learning_rate=0.05,
         max_depth=7,

@@ -3,12 +3,15 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+# 意味: グラフの色（現状維持・転職後・累積収支差額・学習コストの線・回収時点の線）。変えると色だけが変わる。
 COLOR_STATUS_QUO = "#4F8EF7"
 COLOR_CAREER_CHANGE = "#FF5B5B"
 COLOR_CUMULATIVE = "#43a047"
 COLOR_COST = "#FB8C00"
 COLOR_BREAKEVEN = "gold"
+# 意味: 全モデル比較グラフを横に何個並べるか。
 MAX_GRID_COLS = 3
+# 意味: 全モデル比較グラフの1段の高さ（ピクセル）。
 SUBPLOT_HEIGHT = 300
 MONTHS_PER_YEAR = 12
 

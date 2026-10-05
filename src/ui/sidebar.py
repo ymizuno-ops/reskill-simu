@@ -6,6 +6,8 @@ from model_types import MacroParams, ModelDict
 from occupation import OCCUPATION_CATEGORIES, buildCategoryOccMap
 from simulation import RETIREMENT_AGE
 
+# 意味: 画面のモデル選択肢の表示名（左）と、学習済みモデルの名前（右）の対応。
+# 影響: 左の表示名は自由に変えてよい。注意: 右の名前は変えない。表示名を変えたら _DEFAULT_MODEL_LABEL も同じ表記にする。
 _ALL_MODEL_OPTIONS: dict[str, str] = {
     "Ridge（安定型）": "ridge",
     "ElasticNet（L1+L2正則化）": "elasticnet",
@@ -17,25 +19,46 @@ _ALL_MODEL_OPTIONS: dict[str, str] = {
     "XGBoost（勾配ブースティング）": "xgboost",
     "Stacking Ensemble（全モデル統合）": "stacking",
 }
+# 意味: 画面を開いたときに選ばれているモデル。
+# 注意: _ALL_MODEL_OPTIONS の表示名と一字一句同じにする。違うと一覧の最後のモデルが選ばれる。
 _DEFAULT_MODEL_LABEL = "Custom Ridge（特徴量強化型）"
+# 意味: 画面を開いたときの「現職名」の初期値。
+# 注意: 職種マスタ（data/master/occupation_list.csv）の職種名と一字一句同じにする。違うと一覧の先頭の職種が選ばれる。
 _DEFAULT_CURRENT_OCC = "販売店員"
+# 意味: 画面を開いたときの「目標職種名」の初期値。注意: 上と同じく、職種マスタの職種名と一致させる。
 _DEFAULT_TARGET_OCC = "システムコンサルタント・設計者"
+# 意味: 大分類の選択肢のうち「絞り込まない」を表す文言。変えると表示の文言だけが変わる。
 _ALL_CATEGORIES = "（すべて）"
 
 # 入力欄の (最小, 最大, 初期値, 刻み)
 # 年齢の上限は退職年齢の前年（初年度が退職年齢以上だとシミュレーションの前提が成り立たない）
+# 意味: 「現在の年齢」の下限・上限・初期値・刻み（歳）。
+# 注意: 上限は退職年齢から自動で決まるため、数字を書き込まない。
 AGE_INPUT = (20, RETIREMENT_AGE - 1, 30, 1)
+# 意味: 「現在の勤続年数」の下限・上限・初期値・刻み（年）。現状維持の年収予測の起点になる。
 EXP_INPUT = (0, 40, 5, 1)
+# 意味: 「現在の年収」の下限・上限・初期値・刻み（万円）。
+# 注意: 下限・上限は、学習データの職種の年収範囲（step2_to_master.py の 100〜3000万円）とそろえている。
 INCOME_INPUT = (100, 3000, 450, 10)              # 万円
+# 意味: 「経験引継ぎ率」スライダーの下限・上限・初期値（%）。
 SKILL_TRANSFER_INPUT = (0, 100, 20)              # % (最小, 最大, 初期値)
+# 意味: 「自己投資費用」の下限・上限・初期値・刻み（万円）。
+# 影響: 初期値を変えると、開いたときの回収期間と ROI の表示が変わる。
 LEARNING_COST_INPUT = (0, 500, 50, 5)            # 万円
+# 意味: 「期待GDP成長率」スライダーの下限・上限・刻み（%）。初期値は macro_params.json の過去10年平均を使う。
 GDP_GROWTH_INPUT = (-3.0, 3.0, 0.05)             # % (最小, 最大, 刻み)。初期値は過去10年平均
+# 意味: 「将来のCPI」（2020年 = 100 とした物価指数）スライダーの下限・上限・初期値・刻み。
 FUTURE_CPI_INPUT = (80, 150, 105, 1)
+# 意味: 「転職後の昇給抑制」スライダーの下限・上限・初期値・刻み（%）。
 RAISE_SUPPRESSION_INPUT = (0, 50, 0, 5)          # %
+# 意味: 「キャリアリスク係数」スライダーの下限・上限・初期値・刻み（%）。
 CAREER_RISK_INPUT = (0, 30, 0, 5)                # %
 
 PERCENT = 100
+# 意味: CPI の基準値（2020年 = 100）。統計の定義なので変えない。
 CPI_BASE = 100
+# 意味: 物価の上昇分のうち、賃金の昇給に反映される割合（0.3 = 3割）。
+# 影響: 大きくすると、CPI スライダーを上げたときの名目昇給率が大きくなり、現状維持・転職後の両方の年収が上がる。
 CPI_TO_RAISE_WEIGHT = 0.3   # CPI の上昇分のうち名目昇給に反映する割合
 GDP_DIGITS = 2
 

@@ -24,3 +24,7 @@
 - 例外の握りつぶしをなくし、警告ログを出すように変更
 - サイドバーの年齢の上限を 64 歳（RETIREMENT_AGE - 1）にし、65 歳で IndexError になる不具合を修正
 - README・docs/design.md の関数名・ファイル構成を更新、.ai/ERRORS.md に設計漏れを記録
+
+## 2026-10-06 05:30 (docs/nonengineer-comments)
+- src/ 以下 15 ファイル・137 か所に、非エンジニア向けの「意味・影響・注意」コメントを追記（コード本体は変更なし。AST 一致を確認）
+- 現在の計算で使われていない値（age_curve.csv の raise_rate、macro_params.json の forecast_*、simulate の ageCurve 引数）をコメントで明記

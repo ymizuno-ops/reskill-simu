@@ -9,6 +9,8 @@ import logging
 import sys
 
 LOGGER_NAME = "reskill"
+# 意味: 実行ログ1行の書式。%(message)s は「メッセージ本文だけ」を表す。
+# 影響: "%(asctime)s %(message)s" にすると各行の先頭に日時が付く。処理結果は変わらない。
 LOG_FORMAT = "%(message)s"
 
 

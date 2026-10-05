@@ -2,9 +2,14 @@ from __future__ import annotations
 import streamlit as st
 from simulation import calcRoi, RETIREMENT_AGE, MONTHS_PER_YEAR
 
+# 影響: 大きくすると画面の「月収」表示が小さくなる。年収・生涯年収の表示は変わらない。
 _SALARY_MONTHS = 14  # 年収 ÷ 14 で月収換算（賞与2ヶ月分込み）
+# 意味: 画面の「3. 転職から〇年後」で比べる年数。
+# 影響: そのブロックの見出しと、月収・年収の比較の数値が変わる。
 YEARS_AFTER_CHANGE = 5
 PERCENT = 100
+# 意味: ROI の計算で 0 で割らないための、自己投資費用の下限（万円）。
+# 注意: 費用 0 のときは ROI を「∞」と表示するため、通常は変える必要はない。
 MIN_COST_FOR_ROI = 1
 
 

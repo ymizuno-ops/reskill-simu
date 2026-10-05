@@ -25,15 +25,22 @@ from ui.results import renderAnalysisResults
 logger = getLogger(__name__)
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # リポジトリのルート
+# 意味: 画面が読む職種マスタ・マクロ経済パラメータの場所。注意: step2_to_master.py の OUT_DIR と同じ場所にする。
 MASTER_DIR = os.path.join(_ROOT, "data", "master")
+# 意味: 学習済みモデルの場所。ここに models.pkl がないと、初回起動時に Step1〜3 を自動で実行する。
 MODEL_DIR = os.path.join(_ROOT, "models")
+# 意味: 転職直後の基準年収を引く、年齢別の統計 CSV。注意: step1_common.py の OUT_DIR の下にあるファイル。
 AGE_ALL_PATH = os.path.join(_ROOT, "data", "processed", "age_wage_all.csv")
+# 影響: 小さくすると年次詳細の表の行が増える。注意: 表の見出し「5年刻み」の文言は別に書いてあるので、変えたら合わせて直す。
 TABLE_STEP_YEARS = 5   # 年次詳細の表の刻み（年）
 
+# 意味: 全モデル比較グラフに並べるモデルの順番。
+# 注意: 名前は学習済みモデルの名前なので書き換えない。並び順だけ入れ替えてよい。
 _MODEL_KEY_ORDER = [
     "ridge", "elasticnet", "custom", "random_forest", "gradient_boosting",
     "lightgbm", "catboost", "xgboost", "stacking",
 ]
+# 意味: 全モデル比較グラフの小見出し。右の表示名は自由に変えてよく、左の名前は変えない。
 _MODEL_LABEL_MAP = {
     "ridge": "Ridge", "elasticnet": "ElasticNet", "custom": "Custom Ridge",
     "random_forest": "Random Forest", "gradient_boosting": "GradientBoosting",
@@ -42,6 +49,7 @@ _MODEL_LABEL_MAP = {
 }
 
 st.set_page_config(
+    # 意味: ブラウザのタブに出るアプリ名。
     page_title="リスキリングによる年収シミュレーター",
     page_icon="📊",
     layout="wide",
@@ -103,6 +111,7 @@ def loadAssets() -> tuple[ModelDict, pd.DataFrame, pd.DataFrame, MacroParams]:
     return models, occList, ageCurve, macro
 
 
+# 意味: 初回表示の注意事項ダイアログ。見出しはこの行の文字列、本文は下の関数の中の文字列を直接書き換えてよい。
 @st.dialog("⚠️ ご利用にあたっての注意事項")
 def _showDisclaimer() -> None:
     st.markdown(

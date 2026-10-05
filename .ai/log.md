@@ -28,3 +28,6 @@
 ## 2026-10-06 05:30 (docs/nonengineer-comments)
 - src/ 以下 15 ファイル・137 か所に、非エンジニア向けの「意味・影響・注意」コメントを追記（コード本体は変更なし。AST 一致を確認）
 - 現在の計算で使われていない値（age_curve.csv の raise_rate、macro_params.json の forecast_*、simulate の ageCurve 引数）をコメントで明記
+
+## 2026-10-06 06:00 (docs/code-explainer-comments)
+- src/ 以下 16 ファイル・438 か所に、入門レベルの技術解説コメント（構文・ライブラリの使い方）を追記（コード本体は変更なし。AST 一致を確認）

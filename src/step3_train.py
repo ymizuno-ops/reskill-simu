@@ -8,7 +8,9 @@ Wrapper class（LGBMWrapper・CatBoostWrapper・StackingEnsemble）と addFeatur
 model_wrappers.py に置いている。ここから import するので、step3_train.LGBMWrapper の名前でも引ける。
 """
 
+# 型ヒントの新しい書き方を使えるようにする指定（詳しくは log_config.py）。
 from __future__ import annotations
+# pickle: Python のオブジェクトをそのままファイルに保存・復元する標準モジュール。
 import os, json, pickle, time, warnings
 from collections.abc import Callable
 import pandas as pd
@@ -18,6 +20,7 @@ from sklearn.metrics         import r2_score, mean_absolute_error
 
 from log_config import getLogger
 from model_types import ModelDict, ModelEntry, ModelMeta, Regressor, Target
+# noqa: F401 は「読み込んだが使っていない」という警告を出さないための印。step3_train.LGBMWrapper の名前でも引けるよう、ここで読み込んでいる。
 from model_wrappers import LGBMWrapper, CatBoostWrapper, StackingEnsemble, RANDOM_STATE  # noqa: F401
 from step3_models import (
     CV_FOLDS, BASE_FEATURES, LABEL_WIDTH, buildMeta, logScore,
@@ -51,12 +54,14 @@ STACKING_META_ALPHA   = 1.0
 RANKING_BAR_WIDTH     = 20    # 精度ランキングの棒の長さ（R²=1.0 のとき）
 SECTION_RULE_WIDTH    = 65
 
+# 「(DataFrame, 正解) を受け取り、(モデル, 精度情報) を返す関数」の型の別名。
 Trainer = Callable[[pd.DataFrame, Target], tuple[Regressor, ModelMeta]]
 
 # 意味: 常に学習するモデルの一覧。表示名と説明は model_meta.json に保存され、画面の精度カードに出る。
 # 影響: 表示名・説明を書き換えて step3 を実行し直すと、画面の表示が変わる。
 # 注意: 左端のキー（"ridge" など）は画面・シミュレーションと共通の名前なので変えない。
 # (キー, 訓練関数, 表示名, 説明, FE の要否)
+# タプル（丸括弧の組）のリスト。1つのタプルが1モデル分の設定。
 SKLEARN_MODELS: list[tuple[str, Trainer, str, str, bool]] = [
     ("ridge", trainRidge, "Ridge Regression（安定型）",
      "過学習を抑えた線形回帰。標準的なキャリアパスの推計に最適。", False),
@@ -81,18 +86,22 @@ BOOSTING_MODELS: list[tuple[str, Trainer, str, str, bool, str]] = [
 ]
 
 
+# 追加のライブラリが import できるかを調べる。
 def _checkLibs() -> dict[str, bool]:
     """追加ライブラリごとに import できるかを返す（ない場合はそのモデルを飛ばすため例外にしない）"""
     isAvailable: dict[str, bool] = {}
     for lib in OPTIONAL_LIBS:
         try:
+            # __import__ は、名前を文字列で指定して import する組み込みの関数。
             __import__(lib)
             isAvailable[lib] = True
+        # ライブラリが入っていないときに起きるエラー。この場合だけ False にして処理を続ける。
         except ImportError:
             isAvailable[lib] = False
     return isAvailable
 
 
+# models.pkl に保存する1モデル分の辞書を作る。
 def _entry(model: Regressor, meta: ModelMeta, label: str, desc: str, usesFe: bool) -> ModelEntry:
     # キー名は models.pkl / model_meta.json の形式なので変えない
     return {"pipeline": model, "meta": meta, "label": label, "desc": desc, "uses_fe": usesFe}
@@ -101,6 +110,7 @@ def _entry(model: Regressor, meta: ModelMeta, label: str, desc: str, usesFe: boo
 # ──────────────────────────────────────────────────────
 # Stacking Ensemble 訓練
 # ──────────────────────────────────────────────────────
+# 戻り値の型 tuple[A, B] は「A と B の組」という意味。
 def trainStacking(X: pd.DataFrame, y: Target, baseModels: ModelDict) -> tuple[StackingEnsemble, ModelMeta]:
     """
     全ベースモデルを使った Stacking Ensemble を訓練する。
@@ -114,11 +124,14 @@ def trainStacking(X: pd.DataFrame, y: Target, baseModels: ModelDict) -> tuple[St
 
     # CV: StackingEnsemble 自体を5-fold評価
     # （内部でさらにOOFを使うためネストCVになる → 計算コスト大のため簡易評価）
+    # 分割ごとの R² を入れるリスト。
     cvScores = []
     kf = KFold(n_splits=CV_FOLDS, shuffle=True, random_state=RANDOM_STATE)
     yArr = np.asarray(y)
+    # enumerate(..., 1) で番号を 1 から数える。(trainIdx, valIdx) のように括弧で組のまま受け取れる。
     for foldNo, (trainIdx, valIdx) in enumerate(kf.split(X), 1):
         logger.info("    CV fold %d/%d...", foldNo, CV_FOLDS)
+        # 分割ごとに新しい Stacking を作って学習し、検証用のデータで精度を測る（ネストCV）。
         foldModel = StackingEnsemble(base_models=baseModels, n_splits=STACKING_INNER_SPLITS,
                                      meta_alpha=STACKING_META_ALPHA)
         foldModel.fit(X.iloc[trainIdx].reset_index(drop=True), yArr[trainIdx])
@@ -128,6 +141,7 @@ def trainStacking(X: pd.DataFrame, y: Target, baseModels: ModelDict) -> tuple[St
 
     # 全データで最終訓練
     logger.info("    最終訓練中（全データ）...")
+    # 画面で使う最終のモデルは、全データで学習する。
     stacking = StackingEnsemble(base_models=baseModels, n_splits=CV_FOLDS, meta_alpha=STACKING_META_ALPHA)
     stacking.fit(X, yArr)
     logger.info("    最終訓練 完了")
@@ -138,6 +152,7 @@ def trainStacking(X: pd.DataFrame, y: Target, baseModels: ModelDict) -> tuple[St
     logScore("Stacking Ensemble", r2, cvArr, mae, startedAt)
 
     meta = buildMeta(r2, cvArr, mae, BASE_FEATURES)
+    # keys() で辞書のキーの一覧を取り、list でリストにする。
     meta["base_models"] = list(baseModels.keys())
     return stacking, meta
 
@@ -145,8 +160,10 @@ def trainStacking(X: pd.DataFrame, y: Target, baseModels: ModelDict) -> tuple[St
 # ──────────────────────────────────────────────────────
 # メイン
 # ──────────────────────────────────────────────────────
+# 全モデルを順に学習し、「モデル名 → モデル情報」の辞書にまとめる。
 def _trainAll(X: pd.DataFrame, y: Target) -> ModelDict:
     isAvailable = _checkLibs()
+    # True/False を記号に変換するための辞書。
     mark = {True: "✅", False: "❌"}
     logger.info("利用可能ライブラリ: LightGBM=%s / CatBoost=%s / XGBoost=%s\n",
                 mark[isAvailable["lightgbm"]], mark[isAvailable["catboost"]], mark[isAvailable["xgboost"]])
@@ -154,13 +171,17 @@ def _trainAll(X: pd.DataFrame, y: Target) -> ModelDict:
     # ── sklearn モデル（常に訓練）──
     logger.info("[sklearn モデル]")
     models: ModelDict = {}
+    # タプルの中身を5つの変数に分けて受け取る。train には関数が入っている。
     for key, train, label, desc, usesFe in SKLEARN_MODELS:
+        # train(X, y) は (モデル, 精度情報) の組を返す。* で展開して、_entry の最初の2つの引数として渡す。
         models[key] = _entry(*train(X, y), label, desc, usesFe)
 
     # ── 勾配ブースティング系（ライブラリがあれば）──
+    # values() で辞書の値（True/False）だけを取り出し、1つでも True があれば見出しを出す。
     if any(isAvailable.values()):
         logger.info("\n[勾配ブースティング系モデル]")
     for key, train, label, desc, usesFe, displayName in BOOSTING_MODELS:
+        # ライブラリがなければ警告して、continue で次のモデルへ進む。
         if not isAvailable[key]:
             logger.warning("  ⚠ %s スキップ（pip install %s）", displayName, key)
             continue
@@ -169,6 +190,7 @@ def _trainAll(X: pd.DataFrame, y: Target) -> ModelDict:
     # ── Stacking Ensemble（全ベースモデルが揃ってから訓練）──
     logger.info("\n[Stacking Ensemble]")
     logger.info("  ※ ネストCVのため時間がかかります（5〜15分）")
+    # Stacking の学習に失敗しても、他のモデルは保存できるようにする。
     try:
         stackingModel, stackingMeta = trainStacking(X, y, models)
         models["stacking"] = _entry(
@@ -176,16 +198,21 @@ def _trainAll(X: pd.DataFrame, y: Target) -> ModelDict:
             f"全{len(models)}ベースモデルのOOF予測をRidgeで統合。最高精度を目指す。",
             False,   # StackingEnsemble内部で処理するため不要
         )
+    # logger.exception は、エラーの詳細（どこで起きたか）も一緒にログに出す。
     except Exception:
         logger.exception("  ⚠ Stacking スキップ（他のモデルは保存を続ける）")
     return models
 
 
+# 全モデルを pickle で、精度情報を JSON で保存する。
 def _save(models: ModelDict) -> None:
     pklPath = os.path.join(MODEL_DIR, "models.pkl")
+    # "wb" はバイナリの書き込みモード（pickle はバイナリ形式で保存する）。
     with open(pklPath, "wb") as f:
+        # 辞書ごと（中の学習済みモデルも含めて）ファイルに保存する。
         pickle.dump(models, f)
 
+    # 辞書内包表記。| は辞書の結合（右側のキーを追加・上書きした新しい辞書を作る）。
     metaOut = {
         k: v["meta"] | {"label": v["label"], "desc": v["desc"]}
         for k, v in models.items()
@@ -196,15 +223,19 @@ def _save(models: ModelDict) -> None:
     logger.info("\n  ✅ %d モデルを保存 → %s", len(models), pklPath)
 
 
+# 精度（CV の R²）の高い順に並べてログに出す。
 def _logRanking(models: ModelDict) -> None:
     logger.info("\n[精度ランキング（CV R²降順）]")
+    # key= に並べ替えの基準を返す関数を渡す。reverse=True で大きい順。
     ranked = sorted(models.values(), key=lambda v: v["meta"]["r2_cv_mean"], reverse=True)
     for rank, entry in enumerate(ranked, 1):
         cvMean = entry["meta"]["r2_cv_mean"]
+        # 精度に比例した長さの棒を、文字の繰り返しで作る。
         bar = "█" * int(cvMean * RANKING_BAR_WIDTH)
         logger.info("  %d. %s CV R²=%.4f %s", rank, f"{entry['label']:<30}", cvMean, bar)
 
 
+# Step3 全体の処理。学習したモデルの辞書を返す（画面の初回起動時にも呼ばれる）。
 def main() -> ModelDict:
     np.random.seed(RANDOM_STATE)
 
@@ -214,6 +245,7 @@ def main() -> ModelDict:
     df = pd.read_csv(os.path.join(MASTER_DIR, "ml_dataset.csv"))
     logger.info("訓練データ: %s サンプル, %d 職種\n", f"{len(df):,}", df["occupation"].nunique())
 
+    # 入力（職種・年齢・経験年数）と正解（年収）に分けて渡す。
     models = _trainAll(df[BASE_FEATURES], df["annual_income"])
     _save(models)
     _logRanking(models)
@@ -222,5 +254,6 @@ def main() -> ModelDict:
     return models
 
 
+# このファイルを直接実行したときだけ main() を呼ぶ。
 if __name__ == "__main__":
     main()

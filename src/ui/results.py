@@ -1,4 +1,6 @@
+# 型ヒントの新しい書き方を使えるようにする指定（詳しくは log_config.py）。
 from __future__ import annotations
+# Streamlit: Python だけで Web 画面を作るライブラリ。
 import streamlit as st
 from simulation import calcRoi, RETIREMENT_AGE, MONTHS_PER_YEAR
 
@@ -13,10 +15,13 @@ PERCENT = 100
 MIN_COST_FOR_ROI = 1
 
 
+# 値を HTML の <span> で囲んだ文字列を作る。cls は CSS のクラス名で、色や太さを切り替える。
 def _valueSpan(val: float | str, fmt: str = ".1f", unit: str = "万円", cls: str = "val") -> str:
+    # {val:{fmt}} は、書式（例: ".1f" = 小数第1位まで）を変数で指定する f文字列の書き方。
     return f"<span class='{cls}'>{val:{fmt}}{unit}</span>"
 
 
+# 差額を、プラスなら緑、マイナスなら赤で表示する HTML を作る。
 def _diffSpan(val: float, unit: str = "万円", fmt: str = ".1f") -> str:
     isPositive = val >= 0
     cls = "pos" if isPositive else "neg"
@@ -24,16 +29,19 @@ def _diffSpan(val: float, unit: str = "万円", fmt: str = ".1f") -> str:
     return f"<span class='{cls}'>{sign}{val:{fmt}}{unit}</span>"
 
 
+# 回収月から、表示用の文字列と色のクラスを決める。
 def _breakevenText(breakevenMonth: int | None) -> tuple[str, str]:
     """回収期間の表示文字列と CSS クラスを返す"""
     if not breakevenMonth:
         return "回収困難", "neu"
     if breakevenMonth <= MONTHS_PER_YEAR:
         return "1年以内", "pos"
+    # divmod は割り算の商と余りを同時に返す（例: 30 か月 → 2年 6か月）。
     years, months = divmod(breakevenMonth, MONTHS_PER_YEAR)
     return f"{years}年{months}か月", "neu"
 
 
+# 分析結果の5つのブロックを、2列で描画する。
 def renderAnalysisResults(
     statusQuo: list[float],
     careerChange: list[float],
@@ -44,6 +52,7 @@ def renderAnalysisResults(
     skillTransfer: float,
     learningCost: float,
 ) -> None:
+    # 退職までの年数。生涯年収は、この年数分の合計。
     yearsToRetire = max(0, RETIREMENT_AGE - currentAge)
     idxAfter = min(YEARS_AFTER_CHANGE, len(statusQuo) - 1)
 
@@ -52,15 +61,20 @@ def renderAnalysisResults(
     sqAfterAnnual, ccAfterAnnual = statusQuo[idxAfter], careerChange[idxAfter]
     sqAfterMonthly = sqAfterAnnual / _SALARY_MONTHS
     ccAfterMonthly = ccAfterAnnual / _SALARY_MONTHS
+    # [:n] はリストの先頭から n 個を取り出すスライス。
     sqLifetime = sum(statusQuo[:yearsToRetire])
     ccLifetime = sum(careerChange[:yearsToRetire])
     netBenefit = ccLifetime - sqLifetime - learningCost
     breakevenMonth, _ = calcRoi(statusQuo, careerChange, learningCost)
+    # 費用が 0 なら、ROI は無限大（float("inf")）とする。
     roiPct = (netBenefit / max(learningCost, MIN_COST_FOR_ROI)) * PERCENT if learningCost > 0 else float("inf")
 
+    # 画面を2列に分け、それぞれの列の入れ物を受け取る。
     colLeft, colRight = st.columns(2)
 
+    # with ブロックの中で置いた部品は、その列に表示される。
     with colLeft:
+        # markdown で文章や HTML を表示する。unsafe_allow_html=True で、HTML のタグをそのまま使えるようにする。
         st.markdown(
             f"<div class='result-section'><h4>1. 現状（現在年齢）</h4><ul>"
             f"<li>月収: {_valueSpan(currentMonthly)}</li>"

@@ -1,4 +1,6 @@
+# 型ヒントの新しい書き方を使えるようにする指定（詳しくは log_config.py）。
 from __future__ import annotations
+# unicodedata: 文字の種類や正規化（表記をそろえること）を扱う標準モジュール。
 import unicodedata as _ud
 
 # 意味: 画面の「大分類」と、それに含まれる職種名の対応表。
@@ -179,12 +181,15 @@ OCCUPATION_CATEGORIES: dict[str, list[str]] = {
 # 意味: 上の対応表に載っていない職種を入れる大分類の名前。
 OTHER_CATEGORY = "その他"
 
+# 辞書内包表記の二重ループ: 大分類ごと、その中の職種ごとに {職種名: 大分類} を作る（逆引き用）。
 _OCC_TO_CATEGORY: dict[str, str] = {
     occ: cat for cat, occs in OCCUPATION_CATEGORIES.items() for occ in occs
 }
 
 
+# 表記ゆれを吸収するため、文字を正規化して、スペース・中点などを取り除く。
 def _normalize(text: str) -> str:
+    # NFKC 正規化: 全角の英数字を半角にするなど、見た目が同じ文字を1つの形にそろえる。
     normalized = _ud.normalize("NFKC", text)
     return (
         normalized.replace(" ", "")
@@ -197,19 +202,24 @@ def _normalize(text: str) -> str:
     )
 
 
+# 正規化した職種名 → 大分類 の辞書。完全一致で見つからないときの検索に使う。
 _NORMALIZED_MASTER: dict[str, str] = {
     _normalize(occ): cat for cat, occs in OCCUPATION_CATEGORIES.items() for occ in occs
 }
 
 
+# 職種名から大分類を返す。まず完全一致で、次に正規化した名前で探し、それでもなければ OTHER_CATEGORY。
 def getCategory(occ: str) -> str:
     if occ in _OCC_TO_CATEGORY:
         return _OCC_TO_CATEGORY[occ]
     return _NORMALIZED_MASTER.get(_normalize(occ), OTHER_CATEGORY)
 
 
+# 職種のリストを大分類ごとに振り分けた辞書を返す（画面の絞り込みに使う）。
 def buildCategoryOccMap(occs: list[str]) -> dict[str, list[str]]:
+    # すべての大分類を、空のリストで用意する。辞書を for で回すと、キーが順に取り出される。
     catMap: dict[str, list[str]] = {cat: [] for cat in OCCUPATION_CATEGORIES}
     for occ in occs:
+        # setdefault は、キーがなければ既定値（空のリスト）を登録してから値を返す。そのリストに職種を追加する。
         catMap.setdefault(getCategory(occ), []).append(occ)
     return catMap

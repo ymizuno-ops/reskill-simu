@@ -36,3 +36,8 @@
 - 依存管理を requirements.txt から uv（pyproject.toml・uv.lock・.python-version）に移行
 - uv init のひな形 main.py（ルート）と requirements.txt を削除
 - README のセットアップ・実行手順を uv sync / uv run に書き換え、docs/requirements.md の requirements.txt への言及を修正
+
+## 2026-10-09 05:19 (docs/errors-ingested)
+- .ai/ERRORS.md の未取り込み2件を dev-wiki に取り込み、取り込み欄を更新（dev-wiki PR #5）
+- dev-wiki への外部アクセスを .ai/external-access.md に記録
+- PR #8 のマージ後に push したため取り込まれなかった変更を、改めて PR にした

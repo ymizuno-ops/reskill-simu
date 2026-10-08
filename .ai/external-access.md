@@ -1,0 +1,1 @@
+- 2026-10-09 /Users/y.mizuno/ws/dev-wiki (read/write)

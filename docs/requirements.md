@@ -174,7 +174,7 @@
 
 - 本アプリは統計的推計であり、個人の実際の収入を保証しない
 - データソースは厚生労働省・内閣府・総務省の公的統計に限定
-- LightGBM / CatBoost / XGBoost は requirements.txt に含まれる（なくても5モデルで動作）
+- LightGBM / CatBoost / XGBoost は pyproject.toml の依存ライブラリに含まれる（なくても5モデルで動作）
 - .xls 形式ファイルの読み込みには LibreOffice が必要（変換用）
 - Stacking Ensemble の訓練には 10〜20 分程度かかる
 

@@ -31,3 +31,8 @@
 
 ## 2026-10-06 06:00 (docs/code-explainer-comments)
 - src/ 以下 16 ファイル・438 か所に、入門レベルの技術解説コメント（構文・ライブラリの使い方）を追記（コード本体は変更なし。AST 一致を確認）
+
+## 2026-10-09 05:10 (chore/migrate-to-uv)
+- 依存管理を requirements.txt から uv（pyproject.toml・uv.lock・.python-version）に移行
+- uv init のひな形 main.py（ルート）と requirements.txt を削除
+- README のセットアップ・実行手順を uv sync / uv run に書き換え、docs/requirements.md の requirements.txt への言及を修正

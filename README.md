@@ -21,7 +21,9 @@
 --------------------------------------------------------------------------------
 
 reskill-simu/
-├── requirements.txt                # 依存ライブラリ一覧
+├── pyproject.toml                  # 依存ライブラリ一覧（uv で管理）
+├── uv.lock                         # 依存ライブラリのバージョン固定（uv が自動生成）
+├── .python-version                 # 使用する Python バージョン
 ├── README.md                       # このファイル
 │
 ├── src/                            # アプリ本体・データ処理・学習スクリプト
@@ -112,42 +114,42 @@ Step 0  GitHub からファイルを取得
     ls -la
 
     確認すべき項目:
-      requirements.txt     ← 依存ライブラリ一覧
+      pyproject.toml       ← 依存ライブラリ一覧
       src/                 ← アプリ本体（main.py）・データ処理・訓練スクリプト
       data/raw/            ← e-stat データの配置先（中身は空）
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Step 1  Python 仮想環境の作成（推奨）
+Step 1  uv のインストール
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    # 仮想環境を作成（プロジェクトルートで実行）
-    python -m venv .venv
-
-    # 仮想環境を有効化
-    # Windows:
-    .venv\Scripts\activate
+    依存ライブラリと仮想環境の管理には uv を使います。
+    https://docs.astral.sh/uv/getting-started/installation/
 
     # macOS / Linux:
-    source .venv/bin/activate
+    curl -LsSf https://astral.sh/uv/install.sh | sh
 
-    # 有効化できているか確認（パスに .venv が含まれていれば OK）
-    where python   # Windows
-    which python   # macOS / Linux
+    # Windows（PowerShell）:
+    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+    # インストール確認
+    uv --version
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Step 2  依存ライブラリのインストール
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    # 全ライブラリを一括インストール（LightGBM / CatBoost / XGBoost を含む）
-    pip install -r requirements.txt
+    # .venv の作成と全ライブラリのインストールを一括で行う
+    # （プロジェクトルートで実行。LightGBM / CatBoost / XGBoost を含む）
+    # Python 3.11 が無い場合は uv が自動で取得します（.python-version で指定）
+    uv sync
 
     # インストール確認
-    python -c "import streamlit, sklearn, lightgbm, catboost, xgboost; print('OK')"
+    uv run python -c "import streamlit, sklearn, lightgbm, catboost, xgboost; print('OK')"
+
+    ※ 以降のコマンドは uv run を付けて実行します。
+      仮想環境の有効化（activate）は不要です。
 
   ■ よくあるエラー
-    ERROR: Failed building wheel for lightgbm
-    → pip install --upgrade pip setuptools wheel を実行してから再度試してください。
-
     ERROR: Microsoft Visual C++ 14.0 is required  （Windows のみ）
     → https://visualstudio.microsoft.com/visual-cpp-build-tools/ から
       "Build Tools for Visual Studio" をインストールしてください。
@@ -237,10 +239,10 @@ Step 4  データ処理（初回のみ）
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     # Step1: raw データを整形済み CSV に変換（約 1〜2 分）
-    python src/step1_to_processed.py
+    uv run python src/step1_to_processed.py
 
     # Step2: ML 用マスターデータを構築（約 30 秒）
-    python src/step2_to_master.py
+    uv run python src/step2_to_master.py
 
   ▼ 正常完了の確認
 
@@ -270,7 +272,7 @@ Step 5  モデル訓練（初回のみ）
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     # 全モデルを訓練・保存
-    python src/step3_train.py
+    uv run python src/step3_train.py
 
   ▼ 訓練時間の目安
 
@@ -293,7 +295,7 @@ Step 5  モデル訓練（初回のみ）
     models/model_meta.json
 
     # models.pkl の内容を確認するコマンド
-    python -c "
+    uv run python -c "
     import pickle
     with open('models/models.pkl', 'rb') as f:
         m = pickle.load(f)
@@ -306,14 +308,14 @@ Step 5  モデル訓練（初回のみ）
     → step3_train.py が古いバージョンです。最新版に差し替えてください。
 
     ModuleNotFoundError: No module named 'lightgbm'
-    → pip install lightgbm でインストールするか、
+    → uv sync でインストールするか、
       インストールしない場合は sklearn の 5 モデルのみで動作します。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Step 6  アプリの起動
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    streamlit run src/main.py
+    uv run streamlit run src/main.py
 
     # 自動でブラウザが開きます。開かない場合は以下の URL にアクセスしてください。
     # http://localhost:8501
@@ -334,12 +336,11 @@ Step 6  アプリの起動
 
     起動エラー: models.pkl が見つかりません
     → Step 5 のモデル訓練が完了していません。
-      python src/step3_train.py を実行してください。
+      uv run python src/step3_train.py を実行してください。
 
     ModuleNotFoundError: No module named 'streamlit'
-    → 仮想環境が有効化されていない可能性があります。
-      .venv\Scripts\activate（Windows）または source .venv/bin/activate（Mac/Linux）
-      を実行してから再度試してください。
+    → uv run を付けずに実行した可能性があります。
+      uv sync を実行してから、uv run streamlit run src/main.py で再度試してください。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 データ更新手順（毎年 e-stat に新データが公開されたとき）
@@ -349,11 +350,11 @@ Step 6  アプリの起動
     ② .xls は .xlsx に変換してから配置
     ③ 以下のコマンドを順に実行（Step1〜3 の再実行）
 
-    python src/step1_to_processed.py
-    python src/step2_to_master.py
-    python src/step3_train.py
+    uv run python src/step1_to_processed.py
+    uv run python src/step2_to_master.py
+    uv run python src/step3_train.py
 
-    ④ streamlit run src/main.py でアプリを起動して結果を確認
+    ④ uv run streamlit run src/main.py でアプリを起動して結果を確認
 
 
 --------------------------------------------------------------------------------
